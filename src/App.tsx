@@ -1,51 +1,74 @@
-import { createSignal } from "solid-js";
-import logo from "./assets/logo.svg";
-import { invoke } from "@tauri-apps/api/core";
+import { Component, createSignal, onMount, Show } from "solid-js";
+import TitleBar from "./components/layout/TitleBar";
+import SideNav from "./components/layout/SideNav";
+import ChatArea from "./components/chat/ChatArea";
+import StatusBar from "./components/layout/StatusBar";
+import SettingsPanel from "./components/settings/SettingsPanel";
+import { useTheme } from "./stores/theme";
+import { useConversation } from "./stores/conversation";
+import { createConversation } from "./services/api";
+import "./themes/stitch-dark.css";
 import "./App.css";
 
-function App() {
-  const [greetMsg, setGreetMsg] = createSignal("");
-  const [name, setName] = createSignal("");
+const App: Component = () => {
+  const [activeSection, setActiveSection] = createSignal("chat");
+  const [showSettings, setShowSettings] = createSignal(false);
+  const { theme } = useTheme();
+  const { addConversation, selectConversation, activeConversationId } = useConversation();
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name: name() }));
+  onMount(async () => {
+    document.documentElement.setAttribute("data-theme", "dark");
+    // Load Material Symbols font
+    const link = document.createElement("link");
+    link.href = "https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap";
+    link.rel = "stylesheet";
+    document.head.appendChild(link);
+
+    // 启动时自动创建一个会话
+    try {
+      const conv = await createConversation();
+      addConversation(conv);
+      selectConversation(conv.id);
+      console.log("[App] 初始会话已创建:", conv.id);
+    } catch (e) {
+      console.error("[App] 创建初始会话失败:", e);
+    }
+  });
+
+  async function handleNewChat() {
+    try {
+      const conv = await createConversation();
+      addConversation(conv);
+      selectConversation(conv.id);
+    } catch (e) {
+      console.error("Failed to create conversation:", e);
+    }
+  }
+
+  function handleNavigate(section: string) {
+    if (section === "settings") {
+      setShowSettings(true);
+      return;
+    }
+    setActiveSection(section);
+    if (section === "chat" && !activeConversationId()) {
+      handleNewChat();
+    }
   }
 
   return (
-    <main class="container">
-      <h1>Welcome to Tauri + Solid</h1>
-
-      <div class="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" class="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" class="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://solidjs.com" target="_blank">
-          <img src={logo} class="logo solid" alt="Solid logo" />
-        </a>
+    <div class="app">
+      <TitleBar />
+      <div class="app-body">
+        <SideNav onNavigate={handleNavigate} activeSection={activeSection()} />
+        <ChatArea />
       </div>
-      <p>Click on the Tauri, Vite, and Solid logos to learn more.</p>
-
-      <form
-        class="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg()}</p>
-    </main>
+      <StatusBar />
+      <Show when={showSettings()}>
+        <SettingsPanel onClose={() => setShowSettings(false)} />
+      </Show>
+    </div>
   );
-}
+};
 
 export default App;

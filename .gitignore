@@ -1,2 +1,19 @@
 node_modules
 dist
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+
+# Tauri
+src-tauri/target/
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

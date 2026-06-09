@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Legal Insight AI - Dashboard</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "secondary": "#565e74",
+                        "primary-fixed-dim": "#adc7f7",
+                        "surface-tint": "#455f88",
+                        "surface-container": "#eceef0",
+                        "inverse-surface": "#2d3133",
+                        "on-surface-variant": "#43474e",
+                        "primary-container": "#1a365d",
+                        "tertiary-container": "#283748",
+                        "error-container": "#ffdad6",
+                        "on-tertiary-container": "#91a0b5",
+                        "on-background": "#191c1e",
+                        "outline": "#74777f",
+                        "inverse-primary": "#adc7f7",
+                        "on-error": "#ffffff",
+                        "surface-container-lowest": "#ffffff",
+                        "on-primary-container": "#86a0cd",
+                        "surface-variant": "#e0e3e5",
+                        "surface-container-low": "#f2f4f6",
+                        "surface-bright": "#f7f9fb",
+                        "on-tertiary-fixed": "#0d1c2d",
+                        "secondary-fixed": "#dae2fd",
+                        "secondary-fixed-dim": "#bec6e0",
+                        "on-secondary": "#ffffff",
+                        "secondary-container": "#dae2fd",
+                        "on-primary": "#ffffff",
+                        "primary-fixed": "#d6e3ff",
+                        "on-tertiary": "#ffffff",
+                        "on-surface": "#191c1e",
+                        "on-primary-fixed": "#001b3c",
+                        "on-primary-fixed-variant": "#2d476f",
+                        "inverse-on-surface": "#eff1f3",
+                        "background": "#f7f9fb",
+                        "on-secondary-fixed-variant": "#3f465c",
+                        "surface": "#f7f9fb",
+                        "outline-variant": "#c4c6cf",
+                        "tertiary-fixed": "#d4e4fa",
+                        "tertiary": "#132232",
+                        "on-secondary-container": "#5c647a",
+                        "surface-container-high": "#e6e8ea",
+                        "surface-container-highest": "#e0e3e5",
+                        "error": "#ba1a1a",
+                        "on-secondary-fixed": "#131b2e",
+                        "on-error-container": "#93000a",
+                        "tertiary-fixed-dim": "#b9c8de",
+                        "on-tertiary-fixed-variant": "#39485a",
+                        "primary": "#002045",
+                        "surface-dim": "#d8dadc"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "md": "24px",
+                        "sidebar-width": "280px",
+                        "lg": "40px",
+                        "base": "8px",
+                        "xs": "4px",
+                        "sm": "12px",
+                        "chat-max-width": "850px"
+                    },
+                    "fontFamily": {
+                        "headline-sm": ["Inter"],
+                        "body-md": ["Inter"],
+                        "headline-lg-mobile": ["Inter"],
+                        "headline-md": ["Inter"],
+                        "headline-lg": ["Inter"],
+                        "label-md": ["Inter"],
+                        "label-sm": ["Inter"],
+                        "body-lg": ["Inter"]
+                    },
+                    "fontSize": {
+                        "headline-sm": ["18px", {"lineHeight": "24px", "fontWeight": "600"}],
+                        "body-md": ["14px", {"lineHeight": "22px", "fontWeight": "400"}],
+                        "headline-lg-mobile": ["24px", {"lineHeight": "32px", "fontWeight": "600"}],
+                        "headline-md": ["24px", {"lineHeight": "32px", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                        "headline-lg": ["30px", {"lineHeight": "38px", "letterSpacing": "-0.02em", "fontWeight": "600"}],
+                        "label-md": ["12px", {"lineHeight": "16px", "letterSpacing": "0.02em", "fontWeight": "500"}],
+                        "label-sm": ["11px", {"lineHeight": "14px", "fontWeight": "600"}],
+                        "body-lg": ["16px", {"lineHeight": "26px", "fontWeight": "400"}]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #43474e;
+            border-radius: 10px;
+        }
+        .chat-container {
+            max-width: 850px;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background font-body-md text-body-md overflow-hidden h-screen flex">
+<!-- Predicted SideNavBar Component -->
+<aside class="w-sidebar-width h-screen fixed left-0 top-0 bg-primary flex flex-col py-md border-r border-outline-variant z-50">
+<div class="px-md mb-lg">
+<h1 class="font-headline-sm text-headline-sm font-bold text-white mb-xs">Counsel Portal</h1>
+<p class="font-label-sm text-label-sm text-on-primary-container">Senior Associate</p>
+</div>
+<div class="px-md mb-md">
+<button class="w-full py-sm px-md bg-primary-fixed text-on-primary-fixed font-bold flex items-center justify-center gap-base transition-all hover:opacity-90 active:scale-95">
+<span class="material-symbols-outlined">add</span>
+                New Chat
+            </button>
+</div>
+<nav class="flex-grow overflow-y-auto custom-scrollbar">
+<div class="px-md mb-base">
+<span class="font-label-sm text-label-sm text-on-primary-container opacity-60 uppercase tracking-widest">Main Menu</span>
+</div>
+<!-- Mapping Active state to Current Chat -->
+<a class="flex items-center gap-sm h-12 text-white font-bold border-l-4 border-primary-fixed-dim pl-4 bg-primary-container transition-colors" href="#">
+<span class="material-symbols-outlined">chat</span>
+                Current Chat
+            </a>
+<a class="flex items-center gap-sm h-12 text-on-primary-container hover:text-white pl-4 transition-colors hover:bg-primary-container" href="#">
+<span class="material-symbols-outlined">library_books</span>
+                Legal Library
+            </a>
+<a class="flex items-center gap-sm h-12 text-on-primary-container hover:text-white pl-4 transition-colors hover:bg-primary-container" href="#">
+<span class="material-symbols-outlined">history</span>
+                Recent Cases
+            </a>
+<div class="px-md mt-md mb-base">
+<span class="font-label-sm text-label-sm text-on-primary-container opacity-60 uppercase tracking-widest">History</span>
+</div>
+<div class="space-y-xs">
+<a class="block px-md py-xs text-on-primary-container hover:text-white text-body-md truncate" href="#">Merger Agreement Review</a>
+<a class="block px-md py-xs text-on-primary-container hover:text-white text-body-md truncate" href="#">Patent Litigation Prep</a>
+<a class="block px-md py-xs text-on-primary-container hover:text-white text-body-md truncate" href="#">Drafting: Service SLA</a>
+</div>
+</nav>
+<div class="px-md mt-auto pt-md border-t border-on-primary-container border-opacity-20">
+<a class="flex items-center gap-sm h-12 text-on-primary-container hover:text-white pl-4 transition-colors hover:bg-primary-container" href="#">
+<span class="material-symbols-outlined">settings</span>
+                Settings
+            </a>
+<a class="flex items-center gap-sm h-12 text-on-primary-container hover:text-white pl-4 transition-colors hover:bg-primary-container" href="#">
+<span class="material-symbols-outlined">help_outline</span>
+                Support
+            </a>
+</div>
+</aside>
+<!-- Main Stage -->
+<main class="ml-sidebar-width flex-grow flex flex-col relative h-screen">
+<!-- Predicted TopAppBar Component -->
+<header class="h-16 px-lg bg-surface flex justify-between items-center sticky top-0 border-b border-outline-variant z-40">
+<div class="flex items-center gap-md">
+<span class="font-headline-md text-headline-md font-extrabold text-primary">Legal Insight AI</span>
+<div class="h-6 w-px bg-outline-variant mx-xs"></div>
+<h2 class="font-headline-sm text-headline-sm text-secondary">Case Analysis: Smith vs. Jones</h2>
+</div>
+<div class="flex items-center gap-md">
+<div class="hidden md:flex items-center gap-lg">
+<a class="font-label-md text-label-md text-primary border-b-2 border-primary font-semibold py-xs" href="#">Case Analysis</a>
+<a class="font-label-md text-label-md text-secondary hover:text-primary transition-colors py-xs" href="#">Precedent</a>
+<a class="font-label-md text-label-md text-secondary hover:text-primary transition-colors py-xs" href="#">Drafting</a>
+</div>
+<div class="flex items-center gap-sm">
+<button class="p-xs text-secondary hover:text-primary transition-all active:scale-95">
+<span class="material-symbols-outlined">tune</span>
+</button>
+<button class="p-xs text-secondary hover:text-primary transition-all active:scale-95">
+<span class="material-symbols-outlined">more_vert</span>
+</button>
+</div>
+</div>
+</header>
+<!-- Chat Feed Area -->
+<section class="flex-grow overflow-y-auto custom-scrollbar bg-background">
+<div class="chat-container mx-auto px-md py-lg space-y-lg">
+<!-- System Message: Analyzing -->
+<div class="flex flex-col items-start max-w-2xl">
+<div class="flex items-center gap-xs mb-xs">
+<span class="material-symbols-outlined text-secondary scale-75">smart_toy</span>
+<span class="font-label-sm text-label-sm text-secondary">Legal Insight AI</span>
+</div>
+<div class="bg-surface-container-low border border-outline-variant p-md shadow-sm">
+<p class="text-body-md text-on-surface mb-md">Analyzing the provided case law database and California Civil Code Section 3426...</p>
+<div class="w-full bg-surface-variant h-1 overflow-hidden">
+<div class="bg-primary h-full animate-[progress_2s_ease-in-out_infinite]" style="width: 45%;"></div>
+</div>
+</div>
+</div>
+<!-- User Message -->
+<div class="flex flex-col items-end">
+<div class="flex items-center gap-xs mb-xs">
+<span class="font-label-sm text-label-sm text-secondary">Senior Associate</span>
+<span class="material-symbols-outlined text-secondary scale-75">person</span>
+</div>
+<div class="bg-primary-container text-white p-md shadow-sm max-w-2xl">
+<p class="text-body-md">Summarize the key precedents for trade secret misappropriation in California.</p>
+</div>
+</div>
+<!-- AI Response: Structured Summary -->
+<div class="flex flex-col items-start w-full">
+<div class="flex items-center gap-xs mb-xs">
+<span class="material-symbols-outlined text-secondary scale-75">smart_toy</span>
+<span class="font-label-sm text-label-sm text-secondary">Legal Insight AI</span>
+</div>
+<div class="bg-surface-container-low border border-outline-variant p-md shadow-sm w-full">
+<div class="prose prose-slate max-w-none">
+<h3 class="font-headline-sm text-headline-sm text-primary mb-md border-b border-outline-variant pb-xs">California Trade Secret Precedents (CUTSA)</h3>
+<div class="mb-md">
+<p class="text-body-md font-bold text-secondary mb-xs">1. Altavion, Inc. v. Konica Minolta Systems Laboratory, Inc. (2014)</p>
+<p class="text-body-md text-on-surface">Clarified that "ideas" can be protected under CUTSA if they possess independent economic value and are subject to reasonable secrecy efforts.</p>
+<div class="mt-xs">
+<span class="px-xs py-[2px] bg-secondary-container text-on-secondary-container text-label-sm uppercase tracking-tighter">CITED</span>
+<span class="px-xs py-[2px] bg-surface-variant text-secondary text-label-sm uppercase tracking-tighter ml-xs">BEYOND SCOPE</span>
+</div>
+</div>
+<div class="mb-md">
+<p class="text-body-md font-bold text-secondary mb-xs">2. Silvaco Data Systems v. Intel Corp. (2010)</p>
+<p class="text-body-md text-on-surface">Established that trade secret misappropriation must be based on CUTSA; common law claims are preempted if they rely on the same nucleus of facts.</p>
+<div class="mt-xs">
+<span class="px-xs py-[2px] bg-secondary-container text-on-secondary-container text-label-sm uppercase tracking-tighter">CITED</span>
+</div>
+</div>
+<div class="p-sm bg-surface-container-highest border-l-4 border-primary mt-lg">
+<div class="flex items-center gap-sm text-primary mb-xs">
+<span class="material-symbols-outlined">gavel</span>
+<span class="font-label-md text-label-md font-bold">Key takeaway:</span>
+</div>
+<p class="text-body-md italic text-on-surface">California follows a broad interpretation of "Trade Secret" but maintains strict preemption rules to prevent duplicative tort claims.</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Bottom Chat Input -->
+<footer class="bg-surface border-t border-outline-variant p-md">
+<div class="chat-container mx-auto">
+<div class="relative bg-surface-container-low border border-outline focus-within:border-primary transition-colors p-xs group">
+<div class="flex items-center gap-sm px-sm pt-sm">
+<button class="flex items-center gap-xs px-sm py-xs bg-surface-container-high hover:bg-surface-container-highest transition-colors text-secondary text-label-md font-semibold">
+<span class="material-symbols-outlined text-[18px]">psychology</span>
+                            Skill: Research
+                            <span class="material-symbols-outlined text-[16px]">expand_more</span>
+</button>
+<button class="flex items-center gap-xs px-sm py-xs hover:bg-surface-container-high transition-colors text-secondary text-label-md">
+<span class="material-symbols-outlined text-[18px]">attach_file</span>
+                            Attach File
+                        </button>
+</div>
+<textarea class="w-full bg-transparent border-none focus:ring-0 text-body-md p-sm min-h-[80px] resize-none text-on-surface placeholder:text-outline" placeholder="Ask a legal question or request a draft..."></textarea>
+<div class="flex justify-between items-center px-sm pb-sm">
+<span class="text-label-sm text-outline">Precise Mode Active • Citations Included</span>
+<button class="bg-primary text-white p-xs flex items-center justify-center transition-all hover:bg-primary-container active:scale-95 shadow-sm">
+<span class="material-symbols-outlined">send</span>
+</button>
+</div>
+</div>
+</div>
+</footer>
+</main>
+<!-- Global Interaction Scripts -->
+<script>
+        // Simple micro-interaction for active state scaling
+        document.querySelectorAll('button, a').forEach(el => {
+            el.addEventListener('mousedown', () => {
+                el.classList.add('scale-95');
+            });
+            el.addEventListener('mouseup', () => {
+                el.classList.remove('scale-95');
+            });
+            el.addEventListener('mouseleave', () => {
+                el.classList.remove('scale-95');
+            });
+        });
+
+        // Add keyframe for the progress bar
+        const style = document.createElement('style');
+        style.innerHTML = `
+            @keyframes progress {
+                0% { transform: translateX(-100%); }
+                100% { transform: translateX(250%); }
+            }
+        `;
+        document.head.appendChild(style);
+    </script>
+</body></html>

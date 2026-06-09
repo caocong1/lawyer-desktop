@@ -1,0 +1,158 @@
+:root[data-theme="dark"] {
+  /* Surface colors - Deep navy/charcoal */
+  --color-surface-dim: #0d141d;
+  --color-surface: #0d141d;
+  --color-surface-container-lowest: #070f18;
+  --color-surface-container-low: #151c26;
+  --color-surface-container: #19202a;
+  --color-surface-container-high: #232a35;
+  --color-surface-container-highest: #2e3540;
+  --color-surface-variant: #2e3540;
+  --color-surface-bright: #333a45;
+
+  /* On surface colors */
+  --color-on-surface: #dce3f1;
+  --color-on-surface-variant: #c2c6d8;
+  --color-on-background: #dce3f1;
+
+  /* Primary - Electric blue */
+  --color-primary: #b3c5ff;
+  --color-primary-container: #0066ff;
+  --color-primary-fixed: #dae1ff;
+  --color-primary-fixed-dim: #b3c5ff;
+  --color-on-primary: #002b75;
+  --color-on-primary-container: #f8f7ff;
+  --color-on-primary-fixed: #001849;
+  --color-on-primary-fixed-variant: #003fa4;
+  --color-inverse-primary: #0054d6;
+
+  /* Secondary - Cyan accent */
+  --color-secondary: #a6e6ff;
+  --color-secondary-container: #14d1ff;
+  --color-secondary-fixed: #b7eaff;
+  --color-secondary-fixed-dim: #4cd6ff;
+  --color-on-secondary: #003543;
+  --color-on-secondary-container: #00566b;
+  --color-on-secondary-fixed: #001f28;
+  --color-on-secondary-fixed-variant: #004e60;
+
+  /* Tertiary - Orange accent */
+  --color-tertiary: #ffb59d;
+  --color-tertiary-container: #cc4204;
+  --color-tertiary-fixed: #ffdbd0;
+  --color-tertiary-fixed-dim: #ffb59d;
+  --color-on-tertiary: #5d1900;
+  --color-on-tertiary-container: #fff6f4;
+  --color-on-tertiary-fixed: #390c00;
+  --color-on-tertiary-fixed-variant: #832600;
+
+  /* Error */
+  --color-error: #ffb4ab;
+  --color-error-container: #93000a;
+  --color-on-error: #690005;
+  --color-on-error-container: #ffdad6;
+
+  /* Outline */
+  --color-outline: #8c90a1;
+  --color-outline-variant: #424656;
+
+  /* Inverse */
+  --color-inverse-surface: #dce3f1;
+  --color-inverse-on-surface: #2a313b;
+
+  /* Background */
+  --color-background: #0d141d;
+
+  /* Spacing */
+  --spacing-unit: 4px;
+  --spacing-sidebar-collapsed: 64px;
+  --spacing-sidebar-expanded: 260px;
+  --spacing-container-padding: 24px;
+  --spacing-element-gap: 12px;
+  --spacing-panel-gap: 1px;
+
+  /* Border radius */
+  --radius-sm: 0.25rem;
+  --radius-default: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-full: 9999px;
+
+  /* Font families */
+  --font-family: 'Noto Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+
+  /* Font sizes */
+  --font-size-label: 11px;
+  --font-size-body-sm: 13px;
+  --font-size-body-md: 14px;
+  --font-size-title-sm: 18px;
+  --font-size-headline-md: 24px;
+  --font-size-display-lg: 32px;
+
+  /* Line heights */
+  --line-height-label: 16px;
+  --line-height-body-sm: 20px;
+  --line-height-body-md: 22px;
+  --line-height-title-sm: 24px;
+  --line-height-headline-md: 32px;
+  --line-height-display-lg: 40px;
+
+  /* Font weights */
+  --font-weight-regular: 400;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* Shadows */
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 10px 40px rgba(0, 102, 255, 0.2);
+  --shadow-glow: 0 0 20px rgba(0, 102, 255, 0.05);
+
+  /* Glass effects */
+  --glass-bg: rgba(18, 20, 28, 0.7);
+  --glass-border: rgba(255, 255, 255, 0.05);
+  --glass-blur: blur(20px);
+
+  --ai-message-bg: rgba(25, 32, 42, 0.6);
+  --ai-message-border: rgba(76, 214, 255, 0.2);
+  --ai-message-blur: blur(12px);
+
+  /* Legacy compatibility */
+  --bg-primary: var(--color-primary-container);
+  --bg-secondary: var(--color-surface-container);
+  --bg-tertiary: var(--color-surface-container-high);
+  --bg-sidebar: var(--color-surface-container-lowest);
+  --bg-input: var(--color-surface-container-highest);
+  --bg-hover: var(--color-surface-container-highest);
+  --bg-active: var(--color-primary-container);
+  --bg-message-user: var(--color-surface-dim);
+  --bg-message-assistant: var(--ai-message-bg);
+  --bg-code: var(--color-surface-container-highest);
+
+  --text-primary: var(--color-on-surface);
+  --text-secondary: var(--color-secondary-fixed-dim);
+  --text-tertiary: var(--color-outline);
+  --text-inverse: var(--color-on-primary);
+  --text-link: var(--color-primary);
+
+  --border-primary: var(--color-outline-variant);
+  --border-secondary: var(--color-outline);
+
+  --accent-primary: var(--color-primary-container);
+  --accent-hover: var(--color-primary);
+  --accent-light: var(--color-primary-fixed);
+
+  --danger: var(--color-error);
+  --success: #4ade80;
+  --warning: #fbbf24;
+
+  --font-sans: var(--font-family);
+  --font-code: var(--font-mono);
+
+  --sidebar-width: var(--spacing-sidebar-collapsed);
+  --sidebar-expanded-width: var(--spacing-sidebar-expanded);
+  --header-height: 32px;
+  --statusbar-height: 24px;
+  --input-area-min-height: 120px;
+}
