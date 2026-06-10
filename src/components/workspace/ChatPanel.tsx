@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import type { AgentMode } from "../../types/agentMode";
 import { agentModeLabel } from "../../types/agentMode";
 import { useConversation } from "../../stores/conversation";
+import { useTrace } from "../../stores/trace";
 import { containsToolLeakage, sanitizeLlmDocumentContent } from "../../utils/legalDocument";
 import type { ContextRefPayload } from "../../types/contextRefs";
 import { onChatStream, onWorkspaceIndexProgress } from "../../services/api";
@@ -75,6 +76,7 @@ export function ChatPanel(props: ChatPanelProps) {
     applyWorkspaceIndexProgress,
     workspaceIndexForPath,
   } = useConversation();
+  const { toggle: toggleTrace, panelOpen: tracePanelOpen } = useTrace();
 
   const [text, setText] = createSignal("");
   const [attachMenuOpen, setAttachMenuOpen] = createSignal(false);
@@ -93,16 +95,22 @@ export function ChatPanel(props: ChatPanelProps) {
     if (el) el.scrollTop = el.scrollHeight;
   });
 
-  onMount(async () => {
+  // onCleanup must be registered synchronously (before any await), or Solid
+  // never attaches it — leaked listeners double-append stream chunks after
+  // every workspace remount.
+  onMount(() => {
     const onDocClick = (e: MouseEvent) => {
       if (attachMenuOpen() && attachRef && !attachRef.contains(e.target as Node)) {
         setAttachMenuOpen(false);
       }
     };
     document.addEventListener("click", onDocClick);
-    onCleanup(() => document.removeEventListener("click", onDocClick));
 
-    const unlistenProgress = await onWorkspaceIndexProgress((event) => {
+    let disposed = false;
+    let unlistenProgress: (() => void) | undefined;
+    let unlistenStream: (() => void) | undefined;
+
+    void onWorkspaceIndexProgress((event) => {
       if (
         event.conversation_id &&
         event.conversation_id !== activeConversationId()
@@ -110,9 +118,12 @@ export function ChatPanel(props: ChatPanelProps) {
         return;
       }
       applyWorkspaceIndexProgress(event);
+    }).then((u) => {
+      if (disposed) u();
+      else unlistenProgress = u;
     });
 
-    const unlisten = await onChatStream((chunk) => {
+    void onChatStream((chunk) => {
       if (chunk.conversation_id !== activeConversationId()) return;
       if (chunk.status) {
         setStreamStatus(chunk.status);
@@ -122,10 +133,16 @@ export function ChatPanel(props: ChatPanelProps) {
       } else if (chunk.chunk) {
         appendStreamChunk(chunk.chunk);
       }
+    }).then((u) => {
+      if (disposed) u();
+      else unlistenStream = u;
     });
+
     onCleanup(() => {
-      unlisten();
-      unlistenProgress();
+      disposed = true;
+      document.removeEventListener("click", onDocClick);
+      unlistenProgress?.();
+      unlistenStream?.();
     });
   });
 
@@ -224,6 +241,14 @@ export function ChatPanel(props: ChatPanelProps) {
           <span class="d" />
           {showDraftProgress() || showEvidenceProgress() ? "生成中" : isStreaming() ? "回复中" : "已就绪"}
         </div>
+        <button
+          type="button"
+          class={`trace-toggle${tracePanelOpen() ? " on" : ""}${isStreaming() ? " busy" : ""}`}
+          title="后台执行跟踪 (Ctrl+Shift+D)"
+          onClick={() => toggleTrace()}
+        >
+          <Icon name="terminal" />
+        </button>
       </div>
 
       <div class="thread scroll" ref={threadRef}>

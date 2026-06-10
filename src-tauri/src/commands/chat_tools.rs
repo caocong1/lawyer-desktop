@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
-use tokio::time::timeout;
 use sqlx::{Pool, Sqlite};
 use tauri::{AppHandle, Emitter};
+use tokio::time::timeout;
 
 use crate::db;
 use crate::documents::docx_gen;
@@ -20,7 +20,9 @@ use crate::workspace::{
 
 use super::chat::StreamChunk;
 use super::files::read_file_inner;
+use super::trace::Tracer;
 use crate::llm::tool_leak::{contains_tool_leakage, sanitize_assistant_content};
+use serde_json::json;
 
 pub const MAX_TOOL_ROUNDS: usize = 10;
 
@@ -93,10 +95,7 @@ pub async fn execute_tool(
                 .get("skill_name")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "skill_name required".to_string())?;
-            let reason = args
-                .get("reason")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let reason = args.get("reason").and_then(|v| v.as_str()).unwrap_or("");
 
             if let Some(skill) = ctx.skills.find_skill_fuzzy(skill_name).await {
                 *active_skill = Some(skill.clone());
@@ -133,7 +132,10 @@ pub async fn execute_tool(
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "output_path required".to_string())?;
 
-            let validated = ctx.sandbox.validate(output_path).map_err(|e| e.to_string())?;
+            let validated = ctx
+                .sandbox
+                .validate(output_path)
+                .map_err(|e| e.to_string())?;
             docx_gen::generate_docx(title, content, &validated).map_err(|e| e.to_string())?;
 
             if let Ok(doc_json) = serde_json::to_string(&serde_json::json!({
@@ -141,13 +143,9 @@ pub async fn execute_tool(
                 "content_markdown": content,
                 "output_path": validated.to_string_lossy(),
             })) {
-                let _ = db::queries::save_document(
-                    ctx.db,
-                    Some(ctx.conversation_id),
-                    title,
-                    &doc_json,
-                )
-                .await;
+                let _ =
+                    db::queries::save_document(ctx.db, Some(ctx.conversation_id), title, &doc_json)
+                        .await;
             }
 
             Ok(format!("DOCX 已生成: {}", validated.display()))
@@ -179,7 +177,11 @@ pub async fn execute_tool(
                         )
                     })
                     .collect();
-                Ok(format!("找到 {} 条结果：\n{}", hits.len(), lines.join("\n")))
+                Ok(format!(
+                    "找到 {} 条结果：\n{}",
+                    hits.len(),
+                    lines.join("\n")
+                ))
             }
         }
         "read_chunk" => {
@@ -187,9 +189,7 @@ pub async fn execute_tool(
                 .get("chunk_id")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "chunk_id required".to_string())?;
-            let detail = ws_read_chunk(chunk_id)
-                .await
-                .map_err(|e| e.to_string())?;
+            let detail = ws_read_chunk(chunk_id).await.map_err(|e| e.to_string())?;
             Ok(format!(
                 "chunk_id: {}\nrelative_path: {}\nheading_path: {}\n\n{}",
                 detail.chunk_id,
@@ -232,7 +232,11 @@ pub async fn execute_tool(
                 .ok_or_else(|| "workspace 尚未建立索引".to_string())?;
             Ok(format!(
                 "root_id: {}\nroot_path: {}\nstatus: {}\nfile_count: {}\nchunk_count: {}",
-                status.root_id, status.root_path, status.status, status.file_count, status.chunk_count
+                status.root_id,
+                status.root_path,
+                status.status,
+                status.file_count,
+                status.chunk_count
             ))
         }
         other => Err(format!("Unknown tool: {}", other)),
@@ -246,14 +250,29 @@ pub async fn stream_response(
     conversation_id: &str,
     message_id: &str,
     emit_done: bool,
+    tracer: Option<&Tracer>,
 ) -> Result<String, String> {
     use futures::StreamExt;
 
-    let stream = provider
-        .chat_stream(&request)
-        .await
-        .map_err(|e| e.to_string())?;
+    if let Some(t) = tracer {
+        t.emit("stream_start", json!({ "model": request.model }));
+    }
+
+    let stream = match provider.chat_stream(&request).await {
+        Ok(s) => s,
+        Err(e) => {
+            // Keep stream_start/stream_done paired even when connect fails.
+            if let Some(t) = tracer {
+                t.emit(
+                    "stream_done",
+                    json!({ "chars": 0, "reasoning_chars": 0, "connect_error": e.to_string() }),
+                );
+            }
+            return Err(e.to_string());
+        }
+    };
     let mut full_response = String::new();
+    let mut reasoning_chars = 0usize;
     let mut stream = stream;
 
     while let Some(chunk_result) = stream.next().await {
@@ -266,18 +285,47 @@ pub async fn stream_response(
                             continue;
                         }
                         if let Ok(chunk) = serde_json::from_str::<serde_json::Value>(data) {
+                            // Some providers attach usage to the final SSE chunk.
+                            if let Some(usage) = chunk.get("usage") {
+                                if !usage.is_null() {
+                                    if let Some(t) = tracer {
+                                        t.emit("stream_usage", json!({ "usage": usage }));
+                                    }
+                                }
+                            }
                             if let Some(choices) = chunk.get("choices").and_then(|c| c.as_array()) {
                                 for choice in choices {
                                     if let Some(delta) = choice.get("delta") {
+                                        if let Some(reasoning) = delta
+                                            .get("reasoning_content")
+                                            .or_else(|| delta.get("reasoning"))
+                                            .and_then(|c| c.as_str())
+                                        {
+                                            if !reasoning.is_empty() {
+                                                reasoning_chars += reasoning.chars().count();
+                                                if let Some(t) = tracer {
+                                                    t.emit(
+                                                        "thinking_delta",
+                                                        json!({ "text": reasoning }),
+                                                    );
+                                                }
+                                            }
+                                        }
                                         if let Some(content) =
                                             delta.get("content").and_then(|c| c.as_str())
                                         {
                                             full_response.push_str(content);
+                                            // Raw delta for the dev trace — including
+                                            // leaked markup the chat channel filters out.
+                                            if let Some(t) = tracer {
+                                                t.emit("stream_delta", json!({ "text": content }));
+                                            }
                                             if !contains_tool_leakage(content) {
                                                 let _ = app.emit(
                                                     "chat-stream",
                                                     StreamChunk {
-                                                        conversation_id: conversation_id.to_string(),
+                                                        conversation_id: conversation_id
+                                                            .to_string(),
                                                         message_id: message_id.to_string(),
                                                         chunk: content.to_string(),
                                                         done: false,
@@ -295,9 +343,25 @@ pub async fn stream_response(
             }
             Err(e) => {
                 log::error!("Stream error: {}", e);
+                if let Some(t) = tracer {
+                    t.emit(
+                        "error",
+                        json!({ "stage": "stream", "message": e.to_string() }),
+                    );
+                }
                 break;
             }
         }
+    }
+
+    if let Some(t) = tracer {
+        t.emit(
+            "stream_done",
+            json!({
+                "chars": full_response.chars().count(),
+                "reasoning_chars": reasoning_chars,
+            }),
+        );
     }
 
     if emit_done {
@@ -317,12 +381,7 @@ pub async fn stream_response(
 }
 
 /// Emit a complete assistant reply as a single stream event (skip LLM re-stream).
-pub fn emit_text_response(
-    app: &AppHandle,
-    conversation_id: &str,
-    message_id: &str,
-    text: &str,
-) {
+pub fn emit_text_response(app: &AppHandle, conversation_id: &str, message_id: &str, text: &str) {
     let clean = sanitize_assistant_content(text);
     if !clean.is_empty() {
         let _ = app.emit(
@@ -356,6 +415,7 @@ pub fn append_tool_results(
     messages.push(assistant_msg);
     for (tool_call_id, result) in tool_results {
         messages.push(ChatMessage {
+            reasoning_content: None,
             role: "tool".into(),
             content: result,
             name: None,
@@ -378,6 +438,7 @@ pub fn build_messages(
         router::build_system_prompt(all_skills, research_gate, active_skill, evidence_mode);
 
     let mut messages = vec![ChatMessage {
+        reasoning_content: None,
         role: "system".into(),
         content: system_prompt,
         name: None,
@@ -387,6 +448,7 @@ pub fn build_messages(
 
     messages.extend(history);
     messages.push(ChatMessage {
+        reasoning_content: None,
         role: "user".into(),
         content: user_content,
         name: None,

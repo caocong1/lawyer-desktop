@@ -4,6 +4,7 @@ import type { FileAttachment, Conversation, Message } from "../stores/conversati
 import type { ContextRefPayload } from "../types/contextRefs";
 import type { ClassifyAgentModeResult } from "../types/agentMode";
 import type { ParseLegalDocumentResponse } from "../types/legal";
+import type { AgentTraceEvent } from "../types/trace";
 
 export type { ContextRefPayload };
 export type { ClassifyAgentModeResult };
@@ -301,6 +302,15 @@ export async function generateDocx(req: GenerateDocxRequest): Promise<string> {
 // Stream listener
 export function onChatStream(callback: (chunk: StreamChunk) => void): Promise<() => void> {
   return listen<StreamChunk>("chat-stream", (event) => {
+    callback(event.payload);
+  });
+}
+
+// Developer agent-trace listener (structured backend agent-loop events)
+export function onAgentTrace(
+  callback: (event: AgentTraceEvent) => void,
+): Promise<() => void> {
+  return listen<AgentTraceEvent>("agent-trace", (event) => {
     callback(event.payload);
   });
 }

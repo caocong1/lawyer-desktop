@@ -35,7 +35,8 @@ export type IconName =
   | "grid"
   | "chevR"
   | "refresh"
-  | "copy";
+  | "copy"
+  | "terminal";
 
 const path = (d: string) => <path d={d} />;
 
@@ -203,6 +204,12 @@ const icons: Record<IconName, JSX.Element> = {
     <g>
       <rect x="9" y="9" width="11" height="11" rx="2" />
       <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+    </g>
+  ),
+  terminal: (
+    <g>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M7 9l3 3-3 3M12 15h5" />
     </g>
   ),
 };

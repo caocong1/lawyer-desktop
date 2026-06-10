@@ -17,7 +17,8 @@ use lawyer_desktop_lib::workspace;
 
 const ROOT_PATH: &str = r"\\?\C:\Users\sorawatcher\workspace\cn-lawyer-docs-skill\learning-materials\guohang-chongqing-shuangye\case-materials\案件资料";
 
-const TOOL_LEAK_NUDGE: &str = "上一条回复包含了工具调用标记（DSML / invoke / parameter 等），不是正式分析正文。\
+const TOOL_LEAK_NUDGE: &str =
+    "上一条回复包含了工具调用标记（DSML / invoke / parameter 等），不是正式分析正文。\
 请仅通过工具 API 调用 search_workspace、read_chunk 等获取案卷内容，再输出完整 Markdown 诉讼方案。\
 禁止在正文中输出任何工具调用语法。";
 
@@ -41,8 +42,14 @@ async fn execute_evidence_tool(root_id: &str, tc: &ToolCall) -> Result<String, S
                 .get("query")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "query required".to_string())?;
-            let k = args.get("k").and_then(|v| v.as_u64()).unwrap_or(8).clamp(1, 30) as usize;
-            let hits = workspace::search(root_id, query, k).await.map_err(|e| e.to_string())?;
+            let k = args
+                .get("k")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(8)
+                .clamp(1, 30) as usize;
+            let hits = workspace::search(root_id, query, k)
+                .await
+                .map_err(|e| e.to_string())?;
             if hits.is_empty() {
                 Ok(format!("未找到与「{}」相关的 chunk。", query))
             } else {
@@ -56,7 +63,11 @@ async fn execute_evidence_tool(root_id: &str, tc: &ToolCall) -> Result<String, S
                         )
                     })
                     .collect();
-                Ok(format!("找到 {} 条结果：\n{}", hits.len(), lines.join("\n")))
+                Ok(format!(
+                    "找到 {} 条结果：\n{}",
+                    hits.len(),
+                    lines.join("\n")
+                ))
             }
         }
         "read_chunk" => {
@@ -64,7 +75,9 @@ async fn execute_evidence_tool(root_id: &str, tc: &ToolCall) -> Result<String, S
                 .get("chunk_id")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "chunk_id required".to_string())?;
-            let d = workspace::read_chunk(chunk_id).await.map_err(|e| e.to_string())?;
+            let d = workspace::read_chunk(chunk_id)
+                .await
+                .map_err(|e| e.to_string())?;
             Ok(format!(
                 "chunk_id: {}\nrelative_path: {}\n\n{}",
                 d.chunk_id, d.relative_path, d.text
@@ -75,14 +88,19 @@ async fn execute_evidence_tool(root_id: &str, tc: &ToolCall) -> Result<String, S
                 .get("relative_path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "relative_path required".to_string())?;
-            let max_chars = args.get("max_chars").and_then(|v| v.as_u64()).map(|n| n as usize);
+            let max_chars = args
+                .get("max_chars")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize);
             workspace::read_file_relative(root_id, relative_path, max_chars)
                 .await
                 .map_err(|e| e.to_string())
         }
         "list_files" => {
             let pattern = args.get("pattern").and_then(|v| v.as_str());
-            let paths = workspace::list_files(root_id, pattern).await.map_err(|e| e.to_string())?;
+            let paths = workspace::list_files(root_id, pattern)
+                .await
+                .map_err(|e| e.to_string())?;
             Ok(format!("共 {} 个文件：\n{}", paths.len(), paths.join("\n")))
         }
         "get_index_status" => {
@@ -118,7 +136,10 @@ async fn main() -> anyhow::Result<()> {
     let primary = db::queries::get_active_provider(&pool, &key_store)
         .await?
         .ok_or_else(|| anyhow::anyhow!("未配置主模型"))?;
-    println!("provider: {} @ {}", primary.model_name, primary.api_base_url);
+    println!(
+        "provider: {} @ {}",
+        primary.model_name, primary.api_base_url
+    );
 
     let provider = OpenAiCompatProvider::new(ProviderConfig {
         id: primary.id,
@@ -182,6 +203,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut messages = vec![
         ChatMessage {
+            reasoning_content: None,
             role: "system".into(),
             content: system_prompt,
             name: None,
@@ -189,6 +211,7 @@ async fn main() -> anyhow::Result<()> {
             tool_call_id: None,
         },
         ChatMessage {
+            reasoning_content: None,
             role: "user".into(),
             content: user_content,
             name: None,
@@ -198,7 +221,11 @@ async fn main() -> anyhow::Result<()> {
     ];
 
     for round in 0..max_rounds {
-        println!("\n========== ROUND {} (messages={}) ==========", round, messages.len());
+        println!(
+            "\n========== ROUND {} (messages={}) ==========",
+            round,
+            messages.len()
+        );
         let request = ChatRequest {
             model: provider.model_name().to_string(),
             messages: messages.clone(),
@@ -228,6 +255,7 @@ async fn main() -> anyhow::Result<()> {
         println!("finish_reason: {:?}", choice.finish_reason);
 
         let msg = choice.message.clone().unwrap_or(ChatMessage {
+            reasoning_content: None,
             role: "assistant".into(),
             content: String::new(),
             name: None,
@@ -242,7 +270,11 @@ async fn main() -> anyhow::Result<()> {
                 println!("  -> {} args={}", tc.function.name, tc.function.arguments);
             }
         }
-        println!("content ({} chars): {:?}", msg.content.chars().count(), msg.content);
+        println!(
+            "content ({} chars): {:?}",
+            msg.content.chars().count(),
+            msg.content
+        );
         println!("leak detected: {}", contains_tool_leakage(&msg.content));
         let embedded = parse_embedded_tool_calls(&msg.content);
         println!("embedded parsed: {}", embedded.len());
@@ -254,8 +286,13 @@ async fn main() -> anyhow::Result<()> {
                 let result = execute_evidence_tool(&root_id, tc)
                     .await
                     .unwrap_or_else(|e| format!("工具执行失败：{}。请改用其他工具或继续作答。", e));
-                println!("  tool result ({}): {} chars", tc.function.name, result.chars().count());
+                println!(
+                    "  tool result ({}): {} chars",
+                    tc.function.name,
+                    result.chars().count()
+                );
                 messages.push(ChatMessage {
+                    reasoning_content: None,
                     role: "tool".into(),
                     content: result,
                     name: None,
@@ -275,8 +312,13 @@ async fn main() -> anyhow::Result<()> {
                 let result = execute_evidence_tool(&root_id, tc)
                     .await
                     .unwrap_or_else(|e| format!("工具执行失败：{}。请改用其他工具或继续作答。", e));
-                println!("  embedded tool result ({}): {} chars", tc.function.name, result.chars().count());
+                println!(
+                    "  embedded tool result ({}): {} chars",
+                    tc.function.name,
+                    result.chars().count()
+                );
                 messages.push(ChatMessage {
+                    reasoning_content: None,
                     role: "tool".into(),
                     content: result,
                     name: None,
@@ -291,6 +333,7 @@ async fn main() -> anyhow::Result<()> {
             println!("  >> NUDGING (same as GUI loop)");
             messages.push(msg);
             messages.push(ChatMessage {
+                reasoning_content: None,
                 role: "user".into(),
                 content: TOOL_LEAK_NUDGE.into(),
                 name: None,
@@ -301,7 +344,10 @@ async fn main() -> anyhow::Result<()> {
         }
 
         if !msg.content.trim().is_empty() {
-            println!("\n===== FINAL TEXT ({} chars) — clean exit =====", msg.content.chars().count());
+            println!(
+                "\n===== FINAL TEXT ({} chars) — clean exit =====",
+                msg.content.chars().count()
+            );
             return Ok(());
         }
 

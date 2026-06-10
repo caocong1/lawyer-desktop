@@ -87,6 +87,7 @@ pub async fn classify_agent_mode(
         model: provider.model_name().to_string(),
         messages: vec![
             ChatMessage {
+                reasoning_content: None,
                 role: "system".into(),
                 content: CLASSIFIER_SYSTEM.into(),
                 name: None,
@@ -94,6 +95,7 @@ pub async fn classify_agent_mode(
                 tool_call_id: None,
             },
             ChatMessage {
+                reasoning_content: None,
                 role: "user".into(),
                 content: user_prompt,
                 name: None,

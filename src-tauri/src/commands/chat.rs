@@ -1,13 +1,17 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::db::{self, models::FileAttachment};
-use crate::llm::tool_leak::{contains_tool_leakage, parse_embedded_tool_calls, sanitize_assistant_content};
-use crate::llm::types::{ChatMessage, ChatRequest};
+use crate::llm::tool_leak::{
+    contains_tool_leakage, parse_embedded_tool_calls, sanitize_assistant_content,
+};
+use crate::llm::types::{ChatMessage, ChatRequest, ToolCall};
 use crate::llm::LlmEngine;
 use crate::mcp::manager::McpManager;
 use crate::security::path_sandbox::PathSandbox;
@@ -22,6 +26,7 @@ use super::chat_tools::{
     stream_response, update_system_prompt, ToolContext, MAX_TOOL_ROUNDS,
 };
 use super::files::{grant_directory_access, prepare_directory_context};
+use super::trace::{preview, Tracer};
 use super::workspace::spawn_bind_and_index;
 
 /// Same request is retried verbatim this many times when the provider leaks
@@ -35,14 +40,16 @@ const MAX_CONTINUATIONS: usize = 4;
 
 const RESPONSE_MAX_TOKENS: u64 = 8192;
 
-const CONTINUE_INSTRUCTION: &str = "你的上一条输出因长度限制被截断。请直接从中断处继续输出剩余内容：\
+const CONTINUE_INSTRUCTION: &str =
+    "你的上一条输出因长度限制被截断。请直接从中断处继续输出剩余内容：\
 不要重复任何已输出的文字，不要重新开头，不要解释，直接续写。";
 
 const LEAK_FALLBACK_INSTRUCTION: &str = "注意：请不要再尝试调用任何工具。\
 请基于以上已获取的工具结果与上下文，直接输出完整的 Markdown 分析正文。\
 如证据不足，请明确列出缺失的材料清单。正文中禁止出现任何工具调用语法或标记。";
 
-const LEAK_ERROR_MESSAGE: &str = "**分析未完成：** 模型多次返回无法解析的工具调用残留，未能生成可读报告。\
+const LEAK_ERROR_MESSAGE: &str =
+    "**分析未完成：** 模型多次返回无法解析的工具调用残留，未能生成可读报告。\
 请重试，或在设置中更换支持标准工具调用的模型。";
 
 /// Extract Windows absolute paths from free-form user text (supports CJK path segments).
@@ -164,14 +171,20 @@ pub async fn classify_agent_mode(
         directory_aliases,
     };
 
-    let fast = engine.get_fast_provider().await.map_err(|e| e.to_string())?;
+    let fast = engine
+        .get_fast_provider()
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(agent_classifier::classify_agent_mode(fast.as_ref(), &ctx).await)
 }
 
-fn build_classify_context(content: &str, context_refs: Option<&Vec<ContextRef>>) -> ClassifyContext {
+fn build_classify_context(
+    content: &str,
+    context_refs: Option<&Vec<ContextRef>>,
+) -> ClassifyContext {
     let refs = context_refs.cloned().unwrap_or_default();
-    let has_directory_ref = refs.iter().any(|r| r.kind == "directory")
-        || !extract_directory_paths(content).is_empty();
+    let has_directory_ref =
+        refs.iter().any(|r| r.kind == "directory") || !extract_directory_paths(content).is_empty();
     let has_file_ref = refs.iter().any(|r| r.kind == "file");
     let directory_aliases: Vec<String> = refs
         .iter()
@@ -207,7 +220,33 @@ pub async fn send_message(
     req: SendMessageRequest,
 ) -> Result<String, String> {
     let provider = engine.get_provider().await.map_err(|e| e.to_string())?;
+
+    let message_id = Uuid::new_v4().to_string();
+    let conversation_id = req.conversation_id.clone();
+    let tracer = Tracer::new(&app, &conversation_id, &message_id);
+    tracer.emit(
+        "turn_start",
+        json!({
+            "model": provider.model_name(),
+            "content_chars": req.content.chars().count(),
+            "content_preview": preview(&req.content, 400),
+            "attachments": req.attachments.as_ref().map(|a| a.len()).unwrap_or(0),
+            "context_refs": req.context_refs.as_ref().map(|refs| {
+                refs.iter()
+                    .map(|c| json!({"alias": c.alias, "kind": c.kind, "path": c.path}))
+                    .collect::<Vec<_>>()
+            }).unwrap_or_default(),
+        }),
+    );
+
     let all_skills = skills.get_skills().await;
+    tracer.emit(
+        "skills_loaded",
+        json!({
+            "count": all_skills.len(),
+            "names": all_skills.iter().take(60).map(|s| s.name.clone()).collect::<Vec<_>>(),
+        }),
+    );
 
     let research_gate = if let Some(root) = skills.get_skills_root().await {
         loader::load_research_gate(&root).await
@@ -244,20 +283,23 @@ pub async fn send_message(
                             &mut user_content,
                             &mut workspace_root_ids,
                         )
-                        .await?;
+                        .await
+                        .map_err(|e| turn_fail(&tracer, "context_ref", e))?;
                     }
                     "file" => {
-                        let canon = std::fs::canonicalize(&cref.path)
-                            .map_err(|e| format!("无法解析文件路径: {}", e))?;
-                        let parent = canon
-                            .parent()
-                            .ok_or_else(|| format!("文件无父目录: {}", cref.path))?;
-                        grant_directory_access(
-                            &db,
-                            &sandbox,
-                            &parent.to_string_lossy(),
-                        )
-                        .await?;
+                        let canon = std::fs::canonicalize(&cref.path).map_err(|e| {
+                            turn_fail(&tracer, "context_ref", format!("无法解析文件路径: {}", e))
+                        })?;
+                        let parent = canon.parent().ok_or_else(|| {
+                            turn_fail(
+                                &tracer,
+                                "context_ref",
+                                format!("文件无父目录: {}", cref.path),
+                            )
+                        })?;
+                        grant_directory_access(&db, &sandbox, &parent.to_string_lossy())
+                            .await
+                            .map_err(|e| turn_fail(&tracer, "context_ref", e))?;
                         user_content.push_str(&format!(
                             "@{} (文件: {})\n\n",
                             cref.alias,
@@ -265,10 +307,8 @@ pub async fn send_message(
                         ));
                     }
                     _ => {
-                        user_content.push_str(&format!(
-                            "@{} (未知类型: {})\n\n",
-                            cref.alias, cref.path
-                        ));
+                        user_content
+                            .push_str(&format!("@{} (未知类型: {})\n\n", cref.alias, cref.path));
                     }
                 }
             }
@@ -295,25 +335,62 @@ pub async fn send_message(
                 &mut user_content,
                 &mut workspace_root_ids,
             )
-            .await?;
+            .await
+            .map_err(|e| turn_fail(&tracer, "context_ref", e))?;
         }
     }
 
     let classify_ctx = build_classify_context(&req.content, req.context_refs.as_ref());
-    let fast = engine.get_fast_provider().await.map_err(|e| e.to_string())?;
-    let classification =
-        agent_classifier::classify_agent_mode(fast.as_ref(), &classify_ctx).await;
+    tracer.emit(
+        "classify_start",
+        json!({
+            "has_directory_ref": classify_ctx.has_directory_ref,
+            "has_file_ref": classify_ctx.has_file_ref,
+            "directory_aliases": classify_ctx.directory_aliases,
+        }),
+    );
+    let classify_started = Instant::now();
+    let fast = engine
+        .get_fast_provider()
+        .await
+        .map_err(|e| turn_fail(&tracer, "fast_provider", e.to_string()))?;
+    let classification = agent_classifier::classify_agent_mode(fast.as_ref(), &classify_ctx).await;
     let evidence_mode = classification.mode == AgentMode::Evidence;
-
-    let _ = app.emit(
-        "agent-mode-classified",
-        &classification,
+    tracer.emit(
+        "classify_result",
+        json!({
+            "mode": classification.mode,
+            "label": classification.label.clone(),
+            "reason": classification.reason.clone(),
+            "duration_ms": classify_started.elapsed().as_millis() as u64,
+        }),
     );
 
-    let history = load_conversation_history(&db, &req.conversation_id).await?;
+    let _ = app.emit("agent-mode-classified", &classification);
+
+    let history = load_conversation_history(&db, &req.conversation_id)
+        .await
+        .map_err(|e| turn_fail(&tracer, "history", e))?;
+    tracer.emit("history_loaded", json!({ "messages": history.len() }));
 
     let tools = build_all_tools(&mcp, evidence_mode).await;
+    {
+        let (mcp_tools, builtin_tools): (Vec<String>, Vec<String>) = tools
+            .iter()
+            .map(|t| t.function.name.clone())
+            .partition(|n| McpManager::is_mcp_tool(n));
+        tracer.emit(
+            "tools_built",
+            json!({
+                "total": tools.len(),
+                "builtin": builtin_tools,
+                "mcp": mcp_tools,
+                "evidence_mode": evidence_mode,
+            }),
+        );
+    }
 
+    let history_count = history.len();
     let mut messages = build_messages(
         &all_skills,
         research_gate_ref,
@@ -322,9 +399,18 @@ pub async fn send_message(
         history,
         user_content.clone(),
     );
-
-    let message_id = Uuid::new_v4().to_string();
-    let conversation_id = req.conversation_id.clone();
+    tracer.emit(
+        "context_built",
+        json!({
+            "message_count": messages.len(),
+            "history_count": history_count,
+            "system_prompt_chars": messages
+                .first()
+                .map(|m| m.content.chars().count())
+                .unwrap_or(0),
+            "user_content_chars": user_content.chars().count(),
+        }),
+    );
 
     let attachments_json = req
         .attachments
@@ -364,13 +450,16 @@ pub async fn send_message(
     let mut leak_retries = 0usize;
     let mut leak_fallback = false;
 
-    for _round in 0..MAX_TOOL_ROUNDS {
-        emit_stream_status(
-            &app,
-            &conversation_id,
-            &message_id,
-            "thinking",
+    for round in 0..MAX_TOOL_ROUNDS {
+        tracer.emit(
+            "round_start",
+            json!({
+                "round": round + 1,
+                "max_rounds": MAX_TOOL_ROUNDS,
+                "message_count": messages.len(),
+            }),
         );
+        emit_stream_status(&app, &conversation_id, &message_id, "thinking");
 
         let chat_request = ChatRequest {
             model: provider.model_name().to_string(),
@@ -381,22 +470,41 @@ pub async fn send_message(
             stream: false,
         };
 
+        tracer.emit(
+            "llm_request",
+            json!({
+                "round": round + 1,
+                "model": chat_request.model,
+                "stream": false,
+                "temperature": 0.3,
+                "max_tokens": RESPONSE_MAX_TOKENS,
+                "message_count": chat_request.messages.len(),
+                "tool_count": tools.len(),
+            }),
+        );
+        let llm_started = Instant::now();
+
         let response = match provider.chat(&chat_request).await {
             Ok(r) => r,
             Err(e) => {
-                let msg = e.to_string();
+                let msg = turn_fail(&tracer, "llm_request", e.to_string());
                 emit_stream_error(&app, &conversation_id, &message_id, &msg);
                 return Err(msg);
             }
         };
+        let llm_duration_ms = llm_started.elapsed().as_millis() as u64;
 
-        let choice = response
-            .choices
-            .first()
-            .ok_or_else(|| "No response from provider".to_string())?;
+        let choice = response.choices.first().ok_or_else(|| {
+            turn_fail(
+                &tracer,
+                "llm_response",
+                "No response from provider".to_string(),
+            )
+        })?;
         let finish_reason = choice.finish_reason.clone();
 
         let assistant_msg = choice.message.clone().unwrap_or(ChatMessage {
+            reasoning_content: None,
             role: "assistant".into(),
             content: String::new(),
             name: None,
@@ -404,17 +512,43 @@ pub async fn send_message(
             tool_call_id: None,
         });
 
+        tracer.emit(
+            "llm_response",
+            json!({
+                "round": round + 1,
+                "duration_ms": llm_duration_ms,
+                "finish_reason": finish_reason.clone(),
+                "usage": response.usage.clone(),
+                "tool_call_count": assistant_msg
+                    .tool_calls
+                    .as_ref()
+                    .map(|t| t.len())
+                    .unwrap_or(0),
+                "content_chars": assistant_msg.content.chars().count(),
+                "content_preview": preview(&assistant_msg.content, 600),
+            }),
+        );
+        if let Some(ref reasoning) = assistant_msg.reasoning_content {
+            if !reasoning.trim().is_empty() {
+                tracer.emit(
+                    "thinking",
+                    json!({ "round": round + 1, "text": preview(reasoning, 20000) }),
+                );
+            }
+        }
+
         if let Some(ref tool_calls) = assistant_msg.tool_calls {
             if !tool_calls.is_empty() {
                 emit_stream_status(&app, &conversation_id, &message_id, "tool");
-                let mut results = Vec::new();
-                for tc in tool_calls {
-                    let result = match execute_tool(&tool_ctx, tc, &mut active_skill).await {
-                        Ok(r) => r,
-                        Err(e) => format!("工具执行失败：{}。请改用其他工具或继续作答。", e),
-                    };
-                    results.push((tc.id.clone(), result));
-                }
+                let results = run_traced_tool_calls(
+                    &tracer,
+                    &tool_ctx,
+                    tool_calls,
+                    &mut active_skill,
+                    "native",
+                    round + 1,
+                )
+                .await;
 
                 append_tool_results(&mut messages, assistant_msg, results);
 
@@ -434,14 +568,15 @@ pub async fn send_message(
         let embedded = parse_embedded_tool_calls(&assistant_msg.content);
         if !embedded.is_empty() {
             emit_stream_status(&app, &conversation_id, &message_id, "tool");
-            let mut results = Vec::new();
-            for tc in &embedded {
-                let result = match execute_tool(&tool_ctx, tc, &mut active_skill).await {
-                    Ok(r) => r,
-                    Err(e) => format!("工具执行失败：{}。请改用其他工具或继续作答。", e),
-                };
-                results.push((tc.id.clone(), result));
-            }
+            let results = run_traced_tool_calls(
+                &tracer,
+                &tool_ctx,
+                &embedded,
+                &mut active_skill,
+                "embedded",
+                round + 1,
+            )
+            .await;
             let mut tool_msg = assistant_msg.clone();
             tool_msg.tool_calls = Some(embedded);
             tool_msg.content = String::new();
@@ -463,6 +598,15 @@ pub async fn send_message(
             // succeeds on retry. Never feed the leaked text back into history.
             if leak_retries < MAX_LEAK_RETRIES {
                 leak_retries += 1;
+                tracer.emit(
+                    "leak_retry",
+                    json!({
+                        "attempt": leak_retries,
+                        "max": MAX_LEAK_RETRIES,
+                        "stage": "tool_round",
+                        "sample": preview(&assistant_msg.content, 300),
+                    }),
+                );
                 log::warn!(
                     "Unparseable tool leakage (retry {}/{}): {:?}",
                     leak_retries,
@@ -482,9 +626,18 @@ pub async fn send_message(
                 &messages,
                 assistant_msg.content.clone(),
                 finish_reason,
+                Some(&tracer),
             )
             .await;
             full_response = sanitize_assistant_content(&final_text);
+            tracer.emit(
+                "final_answer",
+                json!({
+                    "round": round + 1,
+                    "source": "tool_round",
+                    "chars": full_response.chars().count(),
+                }),
+            );
             emit_text_response(&app, &conversation_id, &message_id, &full_response);
             streamed = true;
             break;
@@ -501,6 +654,19 @@ pub async fn send_message(
             stream: true,
         };
 
+        tracer.emit(
+            "llm_request",
+            json!({
+                "round": round + 1,
+                "model": stream_request.model,
+                "stream": true,
+                "temperature": 0.3,
+                "max_tokens": RESPONSE_MAX_TOKENS,
+                "message_count": stream_request.messages.len(),
+                "tool_count": 0,
+            }),
+        );
+
         full_response = match stream_response(
             &app,
             provider.clone(),
@@ -508,12 +674,13 @@ pub async fn send_message(
             &conversation_id,
             &message_id,
             false,
+            Some(&tracer),
         )
         .await
         {
             Ok(r) => r,
             Err(e) => {
-                let msg = e.to_string();
+                let msg = turn_fail(&tracer, "stream", e.to_string());
                 emit_stream_error(&app, &conversation_id, &message_id, &msg);
                 return Err(msg);
             }
@@ -523,15 +690,17 @@ pub async fn send_message(
             let embedded = parse_embedded_tool_calls(&full_response);
             if !embedded.is_empty() {
                 emit_stream_status(&app, &conversation_id, &message_id, "tool");
-                let mut results = Vec::new();
-                for tc in &embedded {
-                    let result = match execute_tool(&tool_ctx, tc, &mut active_skill).await {
-                        Ok(r) => r,
-                        Err(e) => format!("工具执行失败：{}。请改用其他工具或继续作答。", e),
-                    };
-                    results.push((tc.id.clone(), result));
-                }
+                let results = run_traced_tool_calls(
+                    &tracer,
+                    &tool_ctx,
+                    &embedded,
+                    &mut active_skill,
+                    "stream-embedded",
+                    round + 1,
+                )
+                .await;
                 let tool_msg = ChatMessage {
+                    reasoning_content: None,
                     role: "assistant".into(),
                     content: String::new(),
                     name: None,
@@ -543,6 +712,15 @@ pub async fn send_message(
             }
             if leak_retries < MAX_LEAK_RETRIES {
                 leak_retries += 1;
+                tracer.emit(
+                    "leak_retry",
+                    json!({
+                        "attempt": leak_retries,
+                        "max": MAX_LEAK_RETRIES,
+                        "stage": "stream",
+                        "sample": preview(&full_response, 300),
+                    }),
+                );
                 log::warn!(
                     "Streamed response leaked tool markup (retry {}/{})",
                     leak_retries,
@@ -575,9 +753,14 @@ pub async fn send_message(
 
     if leak_fallback {
         log::warn!("Tool-call leakage persisted after retries; answering without tools");
+        tracer.emit(
+            "leak_fallback",
+            json!({ "retries": leak_retries, "max": MAX_LEAK_RETRIES }),
+        );
         emit_stream_status(&app, &conversation_id, &message_id, "thinking");
         let mut fb_messages = messages.clone();
         fb_messages.push(ChatMessage {
+            reasoning_content: None,
             role: "user".into(),
             content: LEAK_FALLBACK_INSTRUCTION.into(),
             name: None,
@@ -592,15 +775,54 @@ pub async fn send_message(
             max_tokens: Some(RESPONSE_MAX_TOKENS),
             stream: false,
         };
-        if let Ok(resp) = provider.chat(&fb_request).await {
-            if let Some(msg) = resp.choices.first().and_then(|c| c.message.clone()) {
-                let clean = sanitize_assistant_content(&msg.content);
-                if !clean.is_empty() {
-                    emit_stream_status(&app, &conversation_id, &message_id, "streaming");
-                    emit_text_response(&app, &conversation_id, &message_id, &clean);
-                    full_response = clean;
-                    streamed = true;
+        tracer.emit(
+            "llm_request",
+            json!({
+                "round": 0,
+                "model": fb_request.model,
+                "stream": false,
+                "temperature": 0.3,
+                "max_tokens": RESPONSE_MAX_TOKENS,
+                "message_count": fb_request.messages.len(),
+                "tool_count": 0,
+                "purpose": "leak_fallback",
+            }),
+        );
+        let fb_started = Instant::now();
+        match provider.chat(&fb_request).await {
+            Ok(resp) => {
+                let fb_msg = resp.choices.first().and_then(|c| c.message.clone());
+                tracer.emit(
+                    "llm_response",
+                    json!({
+                        "round": 0,
+                        "duration_ms": fb_started.elapsed().as_millis() as u64,
+                        "finish_reason": resp.choices.first().and_then(|c| c.finish_reason.clone()),
+                        "usage": resp.usage.clone(),
+                        "tool_call_count": 0,
+                        "content_chars": fb_msg.as_ref().map(|m| m.content.chars().count()).unwrap_or(0),
+                        "content_preview": fb_msg
+                            .as_ref()
+                            .map(|m| preview(&m.content, 600))
+                            .unwrap_or_default(),
+                    }),
+                );
+                if let Some(msg) = fb_msg {
+                    let clean = sanitize_assistant_content(&msg.content);
+                    if !clean.is_empty() {
+                        emit_stream_status(&app, &conversation_id, &message_id, "streaming");
+                        emit_text_response(&app, &conversation_id, &message_id, &clean);
+                        full_response = clean;
+                        streamed = true;
+                    }
                 }
+            }
+            Err(e) => {
+                log::warn!("Leak-fallback request failed: {}", e);
+                tracer.emit(
+                    "error",
+                    json!({ "stage": "leak_fallback", "message": e.to_string() }),
+                );
             }
         }
         if !streamed {
@@ -613,6 +835,7 @@ pub async fn send_message(
 
     if !streamed {
         log::warn!("Tool rounds exhausted without final text; forcing stream");
+        tracer.emit("rounds_exhausted", json!({ "max_rounds": MAX_TOOL_ROUNDS }));
         emit_stream_status(&app, &conversation_id, &message_id, "streaming");
         let stream_request = ChatRequest {
             model: provider.model_name().to_string(),
@@ -622,16 +845,39 @@ pub async fn send_message(
             max_tokens: Some(RESPONSE_MAX_TOKENS),
             stream: true,
         };
-        full_response = stream_response(
+        tracer.emit(
+            "llm_request",
+            json!({
+                "round": 0,
+                "model": stream_request.model,
+                "stream": true,
+                "temperature": 0.3,
+                "max_tokens": RESPONSE_MAX_TOKENS,
+                "message_count": stream_request.messages.len(),
+                "tool_count": 0,
+                "purpose": "rounds_exhausted",
+            }),
+        );
+        full_response = match stream_response(
             &app,
             provider.clone(),
             stream_request,
             &conversation_id,
             &message_id,
             true,
+            Some(&tracer),
         )
         .await
-        .unwrap_or_default();
+        {
+            Ok(r) => r,
+            Err(e) => {
+                tracer.emit(
+                    "error",
+                    json!({ "stage": "stream", "message": e.to_string() }),
+                );
+                String::new()
+            }
+        };
         full_response = sanitize_assistant_content(&full_response);
     }
 
@@ -650,7 +896,121 @@ pub async fn send_message(
         }
     }
 
+    tracer.emit(
+        "turn_end",
+        json!({
+            "ok": true,
+            "duration_ms": tracer.elapsed_ms(),
+            "response_chars": full_response.chars().count(),
+            "streamed": streamed,
+            "leak_fallback": leak_fallback,
+        }),
+    );
+
     Ok(message_id)
+}
+
+/// Emit the terminal failure pair (`error` + `turn_end{ok:false}`) so the
+/// trace panel never shows a failed turn as still live. Returns the message
+/// so it can be used inside `map_err`/`ok_or_else`.
+fn turn_fail(tracer: &Tracer, stage: &str, msg: String) -> String {
+    tracer.emit("error", json!({ "stage": stage, "message": msg.clone() }));
+    tracer.emit(
+        "turn_end",
+        json!({
+            "ok": false,
+            "duration_ms": tracer.elapsed_ms(),
+            "error": msg.clone(),
+        }),
+    );
+    msg
+}
+
+/// Execute one batch of tool calls, emitting `tool_call` / `tool_result` /
+/// `skill_activated` trace events around each execution.
+async fn run_traced_tool_calls(
+    tracer: &Tracer,
+    ctx: &ToolContext<'_>,
+    tool_calls: &[ToolCall],
+    active_skill: &mut Option<crate::skills::loader::SkillMetadata>,
+    origin: &str,
+    round: usize,
+) -> Vec<(String, String)> {
+    let mut results = Vec::new();
+    for tc in tool_calls {
+        let name = tc.function.name.as_str();
+        let tool_kind = if McpManager::is_mcp_tool(name) {
+            "mcp"
+        } else if name == "select_skill" {
+            "skill"
+        } else {
+            "builtin"
+        };
+        tracer.emit(
+            "tool_call",
+            json!({
+                "round": round,
+                "call_id": tc.id,
+                "name": name,
+                "origin": origin,
+                "tool_kind": tool_kind,
+                "arguments": preview(&tc.function.arguments, 6000),
+            }),
+        );
+
+        let skill_before = active_skill.as_ref().map(|s| s.name.clone());
+        let started = Instant::now();
+        let outcome = execute_tool(ctx, tc, active_skill).await;
+        let duration_ms = started.elapsed().as_millis() as u64;
+
+        let result = match outcome {
+            Ok(r) => {
+                tracer.emit(
+                    "tool_result",
+                    json!({
+                        "round": round,
+                        "call_id": tc.id,
+                        "name": name,
+                        "ok": true,
+                        "duration_ms": duration_ms,
+                        "result_chars": r.chars().count(),
+                        "result_preview": preview(&r, 3000),
+                    }),
+                );
+                r
+            }
+            Err(e) => {
+                tracer.emit(
+                    "tool_result",
+                    json!({
+                        "round": round,
+                        "call_id": tc.id,
+                        "name": name,
+                        "ok": false,
+                        "duration_ms": duration_ms,
+                        "error": e,
+                    }),
+                );
+                format!("工具执行失败：{}。请改用其他工具或继续作答。", e)
+            }
+        };
+
+        if let Some(skill) = active_skill.as_ref() {
+            if skill_before.as_deref() != Some(skill.name.as_str()) {
+                tracer.emit(
+                    "skill_activated",
+                    json!({
+                        "name": skill.name,
+                        "plugin": skill.plugin_name,
+                        "description": preview(&skill.description, 300),
+                    }),
+                );
+            }
+        }
+
+        results.push((tc.id.clone(), result));
+    }
+    results
 }
 
 /// Collect the full answer, auto-continuing while the provider reports
@@ -660,6 +1020,7 @@ async fn collect_with_continuations(
     messages: &[ChatMessage],
     first_segment: String,
     first_finish_reason: Option<String>,
+    tracer: Option<&Tracer>,
 ) -> String {
     let mut full = first_segment.clone();
     let mut last_segment = first_segment;
@@ -674,7 +1035,18 @@ async fn collect_with_continuations(
             continuations,
             MAX_CONTINUATIONS
         );
+        if let Some(t) = tracer {
+            t.emit(
+                "continuation",
+                json!({
+                    "n": continuations,
+                    "max": MAX_CONTINUATIONS,
+                    "collected_chars": full.chars().count(),
+                }),
+            );
+        }
         cont_messages.push(ChatMessage {
+            reasoning_content: None,
             role: "assistant".into(),
             content: last_segment.clone(),
             name: None,
@@ -682,6 +1054,7 @@ async fn collect_with_continuations(
             tool_call_id: None,
         });
         cont_messages.push(ChatMessage {
+            reasoning_content: None,
             role: "user".into(),
             content: CONTINUE_INSTRUCTION.into(),
             name: None,
@@ -717,6 +1090,17 @@ async fn collect_with_continuations(
             break;
         }
         finish = choice.finish_reason.clone();
+        if let Some(t) = tracer {
+            t.emit(
+                "continuation_result",
+                json!({
+                    "n": continuations,
+                    "segment_chars": segment.chars().count(),
+                    "finish_reason": finish.clone(),
+                    "usage": resp.usage.clone(),
+                }),
+            );
+        }
         full.push_str(&segment);
         last_segment = segment;
     }
@@ -783,6 +1167,7 @@ async fn load_conversation_history(
                 msg.content
             };
             history.push(ChatMessage {
+                reasoning_content: None,
                 role: msg.role,
                 content,
                 name: None,
@@ -806,7 +1191,12 @@ async fn load_conversation_history(
 async fn maybe_auto_title(pool: &Pool<Sqlite>, conversation_id: &str, user_content: &str) {
     if let Ok(Some(conv)) = db::queries::get_conversation(pool, conversation_id).await {
         if conv.title == "新会话" && !user_content.is_empty() {
-            let new_title = user_content.chars().take(20).collect::<String>().trim().to_string();
+            let new_title = user_content
+                .chars()
+                .take(20)
+                .collect::<String>()
+                .trim()
+                .to_string();
             if !new_title.is_empty() {
                 let _ =
                     db::queries::update_conversation_title(pool, conversation_id, &new_title).await;
@@ -816,7 +1206,9 @@ async fn maybe_auto_title(pool: &Pool<Sqlite>, conversation_id: &str, user_conte
 }
 
 #[tauri::command]
-pub async fn create_conversation(db: State<'_, Pool<Sqlite>>) -> Result<db::models::Conversation, String> {
+pub async fn create_conversation(
+    db: State<'_, Pool<Sqlite>>,
+) -> Result<db::models::Conversation, String> {
     let conv = db::queries::create_conversation(&db, "新会话")
         .await
         .map_err(|e| e.to_string())?;

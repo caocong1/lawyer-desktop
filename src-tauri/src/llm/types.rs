@@ -13,6 +13,11 @@ pub struct ChatMessage {
     pub role: String,
     #[serde(default, deserialize_with = "null_to_empty_string")]
     pub content: String,
+    /// DeepSeek-style thinking (`reasoning` on OpenRouter-style gateways).
+    /// Captured for the dev trace only — never serialized back to the
+    /// provider (some APIs reject it in history).
+    #[serde(default, skip_serializing, alias = "reasoning")]
+    pub reasoning_content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

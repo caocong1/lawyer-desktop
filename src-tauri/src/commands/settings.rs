@@ -1,19 +1,19 @@
-use serde::{Deserialize, Serialize};
-use tauri::State;
-use sqlx::{Pool, Sqlite};
-use uuid::Uuid;
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
+use sqlx::{Pool, Sqlite};
+use tauri::State;
+use uuid::Uuid;
 
 use crate::db;
-use crate::llm::{self, LlmEngine, ProviderPreset};
 use crate::llm::types::ProviderConfig;
+use crate::llm::{self, LlmEngine, ProviderPreset};
 use crate::mcp::manager::McpManager;
 use crate::mcp::types::McpServerHealth;
 use crate::security::key_store::KeyStore;
 use crate::security::path_sandbox::PathSandbox;
+use crate::skills::SkillRegistry;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::skills::SkillRegistry;
 
 async fn resolve_fast_api_key(
     db: &Pool<Sqlite>,
@@ -107,7 +107,10 @@ pub async fn setup_fast_provider(
         db::queries::clear_fast_provider_config(&db)
             .await
             .map_err(|e| e.to_string())?;
-        engine.set_fast_provider(None).await.map_err(|e| e.to_string())?;
+        engine
+            .set_fast_provider(None)
+            .await
+            .map_err(|e| e.to_string())?;
         return Ok(());
     }
 
@@ -134,7 +137,10 @@ pub async fn setup_fast_provider(
         temperature: None,
         max_tokens: None,
     };
-    engine.set_fast_provider(Some(config)).await.map_err(|e| e.to_string())
+    engine
+        .set_fast_provider(Some(config))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -186,7 +192,10 @@ pub async fn setup_provider(
         max_tokens: None,
     };
 
-    engine.set_provider(config.clone()).await.map_err(|e| e.to_string())?;
+    engine
+        .set_provider(config.clone())
+        .await
+        .map_err(|e| e.to_string())?;
 
     let now = Utc::now().to_rfc3339();
     let provider = db::models::LlmProvider {
@@ -229,6 +238,7 @@ pub async fn test_provider(req: ProviderSetupRequest) -> Result<String, String> 
     let request = ChatRequest {
         model: req.model_name,
         messages: vec![ChatMessage {
+            reasoning_content: None,
             role: "user".into(),
             content: "请回复：连接成功".into(),
             name: None,

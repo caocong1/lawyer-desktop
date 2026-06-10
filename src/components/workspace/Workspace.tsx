@@ -3,6 +3,7 @@ import { useConversation } from "../../stores/conversation";
 import { ChatPanel } from "./ChatPanel";
 import { DocPreview } from "./DocPreview";
 import { CitationPanel } from "./CitationPanel";
+import { AgentTracePanel } from "./AgentTracePanel";
 import { Icon } from "../icons/Icons";
 import "./Workspace.css";
 
@@ -137,6 +138,7 @@ export function Workspace(props: WorkspaceProps) {
         onInsert={(c) => props.onToast(`已插入引用：${c.title}`)}
         onLocate={onLocate}
       />
+      <AgentTracePanel />
       <div class={`toast${props.toast ? " show" : ""}`}>
         <Icon name="check" />
         {props.toast}

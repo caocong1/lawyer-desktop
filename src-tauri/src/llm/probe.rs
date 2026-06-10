@@ -61,17 +61,21 @@ pub async fn probe_provider(slot: &str, config: ProviderConfig) -> ToolSupportRe
         model: config.model_name.clone(),
         messages: vec![
             ChatMessage {
+                reasoning_content: None,
                 role: "system".into(),
-                content: "你是连通性测试助手。用户要求工具测试时，必须通过 tools API 调用 ping_test，\
+                content:
+                    "你是连通性测试助手。用户要求工具测试时，必须通过 tools API 调用 ping_test，\
                     不要在正文输出 XML、DSML 或 invoke 标记。"
-                    .into(),
+                        .into(),
                 name: None,
                 tool_calls: None,
                 tool_call_id: None,
             },
             ChatMessage {
+                reasoning_content: None,
                 role: "user".into(),
-                content: "请调用 ping_test 工具，参数 message=hello。只调用工具，不要写其它正文。".into(),
+                content: "请调用 ping_test 工具，参数 message=hello。只调用工具，不要写其它正文。"
+                    .into(),
                 name: None,
                 tool_calls: None,
                 tool_call_id: None,
