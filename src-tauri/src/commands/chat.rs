@@ -80,6 +80,16 @@ pub async fn send_message(
         log::warn!("Failed to save user message: {}", e);
     }
 
+    // Auto-generate title from first message if title is still placeholder
+    if let Ok(Some(conv)) = db::queries::get_conversation(&db, &conversation_id).await {
+        if conv.title == "新会话" && !user_content.is_empty() {
+            let new_title = user_content.chars().take(20).collect::<String>().trim().to_string();
+            if !new_title.is_empty() {
+                let _ = db::queries::update_conversation_title(&db, &conversation_id, &new_title).await;
+            }
+        }
+    }
+
     let chat_request = ChatRequest {
         model: provider.model_name().to_string(),
         messages,
@@ -204,4 +214,15 @@ pub async fn set_active_skill(
     _skill_name: String,
 ) -> Result<(), String> {
     Ok(())
+}
+
+#[tauri::command]
+pub async fn update_conversation_title(
+    db: State<'_, Pool<Sqlite>>,
+    conversation_id: String,
+    title: String,
+) -> Result<(), String> {
+    db::queries::update_conversation_title(&db, &conversation_id, &title)
+        .await
+        .map_err(|e| e.to_string())
 }

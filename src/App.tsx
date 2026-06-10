@@ -1,10 +1,11 @@
-import { Component, createSignal, Show, createEffect } from "solid-js";
+import { Component, createSignal, Show, onMount } from "solid-js";
 import TitleBar from "./components/layout/TitleBar";
 import SideNav from "./components/layout/SideNav";
 import HomePage from "./components/home/HomePage";
 import Workspace from "./components/workspace/Workspace";
 import SettingsPanel from "./components/settings/SettingsPanel";
 import { useConversation } from "./stores/conversation";
+import { useSettings } from "./stores/settings";
 import { createConversation } from "./services/api";
 import "./themes/molv-tokens.css";
 import "./themes/molv-base.css";
@@ -15,8 +16,10 @@ const App: Component = () => {
   const [showSettings, setShowSettings] = createSignal(false);
   const [toast, setToast] = createSignal<{ msg: string; show: boolean }>({ msg: "", show: false });
   const [docReady, setDocReady] = createSignal(false);
+  const [isLoading, setIsLoading] = createSignal(true);
 
-  const { activeConversationId } = useConversation();
+  const { activeConversationId, loadConversations, switchConversation } = useConversation();
+  const { restoreProvider, isConfigured } = useSettings();
 
   function showToast(msg: string) {
     setToast({ msg, show: true });
@@ -37,18 +40,34 @@ const App: Component = () => {
     }
   }
 
-  createEffect(async () => {
-    if (!activeConversationId()) {
-      try {
-        await createConversation();
-      } catch (e) {
-        console.error("[App] 创建初始会话失败:", e);
+  onMount(async () => {
+    try {
+      await restoreProvider();
+      if (!isConfigured()) {
+        setShowSettings(true);
       }
+      await loadConversations();
+      const convs = useConversation().conversations();
+      if (convs.length > 0 && !activeConversationId()) {
+        await switchConversation(convs[0].id);
+      } else if (!activeConversationId()) {
+        await createConversation();
+      }
+    } catch (e) {
+      console.error("[App] 启动加载失败:", e);
+    } finally {
+      setIsLoading(false);
     }
   });
 
   return (
     <div class="app">
+      <Show when={isLoading()}>
+        <div class="loading-overlay">
+          <div class="loading-spinner" />
+          <span>加载中...</span>
+        </div>
+      </Show>
       <TitleBar />
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
         <SideNav onNavigate={handleNavigate} />

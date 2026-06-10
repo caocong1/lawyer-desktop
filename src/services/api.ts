@@ -100,6 +100,10 @@ export async function setActiveConversation(conversationId: string): Promise<voi
   return invoke("set_active_conversation", { conversationId });
 }
 
+export async function updateConversationTitle(conversationId: string, title: string): Promise<void> {
+  return invoke("update_conversation_title", { conversationId, title });
+}
+
 // Settings
 export async function getProviderPresets(): Promise<ProviderPreset[]> {
   return invoke("get_provider_presets");

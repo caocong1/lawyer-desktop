@@ -103,7 +103,7 @@ pub fn run() {
 
     env_logger::init();
 
-    let mut builder = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
@@ -178,6 +178,7 @@ pub fn run() {
             commands::chat::get_messages,
             commands::chat::delete_conversation,
             commands::chat::set_active_skill,
+            commands::chat::update_conversation_title,
             commands::settings::get_provider_presets,
             commands::settings::setup_provider,
             commands::settings::test_provider,
