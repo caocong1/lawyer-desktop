@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { FileAttachment } from "../stores/conversation";
+import type { FileAttachment, Conversation, Message } from "../stores/conversation";
 
 export interface SendMessageRequest {
   conversation_id: string;
@@ -66,6 +66,38 @@ export async function createConversation(): Promise<{
   updated_at: string;
 }> {
   return invoke("create_conversation");
+}
+
+export async function getConversations(): Promise<Conversation[]> {
+  return invoke("get_conversations");
+}
+
+export async function getMessages(conversationId: string): Promise<Message[]> {
+  return invoke("get_messages", { conversationId });
+}
+
+export async function deleteConversation(conversationId: string): Promise<void> {
+  return invoke("delete_conversation", { conversationId });
+}
+
+export interface LlmProvider {
+  id: string;
+  name: string;
+  display_name: string;
+  api_base_url: string;
+  api_key?: string;
+  model_name: string;
+  is_active: boolean;
+  config_json?: string;
+  created_at: string;
+}
+
+export async function getActiveProvider(): Promise<LlmProvider | null> {
+  return invoke("get_active_provider");
+}
+
+export async function setActiveConversation(conversationId: string): Promise<void> {
+  return invoke("set_active_conversation", { conversationId });
 }
 
 // Settings

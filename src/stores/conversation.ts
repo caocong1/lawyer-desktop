@@ -32,16 +32,58 @@ const [messages, setMessages] = createSignal<Message[]>([]);
 const [isStreaming, setIsStreaming] = createSignal(false);
 const [streamingContent, setStreamingContent] = createSignal("");
 
+import {
+  getConversations,
+  getMessages,
+  deleteConversation as deleteConversationApi,
+  setActiveConversation,
+} from "../services/api";
+
 export function useConversation() {
   function addConversation(conv: Conversation) {
     setConversations((prev) => [conv, ...prev]);
   }
 
-  function removeConversation(id: string) {
+  async function loadConversations() {
+    try {
+      const result = await getConversations();
+      setConversations(result);
+    } catch (e) {
+      console.error("加载会话列表失败:", e);
+    }
+  }
+
+  async function loadMessages(conversationId: string) {
+    try {
+      const result = await getMessages(conversationId);
+      setMessages(result);
+    } catch (e) {
+      console.error("加载消息失败:", e);
+    }
+  }
+
+  async function removeConversation(id: string) {
+    try {
+      await deleteConversationApi(id);
+    } catch (e) {
+      console.error("删除会话失败:", e);
+    }
     setConversations((prev) => prev.filter((c) => c.id !== id));
     if (activeConversationId() === id) {
       const remaining = conversations().filter((c) => c.id !== id);
       setActiveConversationId(remaining.length > 0 ? remaining[0].id : null);
+      setMessages([]);
+    }
+  }
+
+  async function switchConversation(id: string) {
+    setActiveConversationId(id);
+    setStreamingContent("");
+    await loadMessages(id);
+    try {
+      await setActiveConversation(id);
+    } catch (e) {
+      console.error("保存活动会话失败:", e);
     }
   }
 
@@ -78,15 +120,16 @@ export function useConversation() {
   }
 
   return {
-    // signals — 需要用 () 调用
     conversations,
     activeConversationId,
     messages,
     isStreaming,
     streamingContent,
-    // actions
     addConversation,
+    loadConversations,
+    loadMessages,
     removeConversation,
+    switchConversation,
     selectConversation,
     setActiveConversationId,
     addMessage,

@@ -1,4 +1,5 @@
 import { createSignal } from "solid-js";
+import { getActiveProvider } from "../services/api";
 
 export interface ProviderPreset {
   name: string;
@@ -20,6 +21,18 @@ const [activeProvider, setActiveProvider] = createSignal<ProviderConfig | null>(
 const [skillsRoot, setSkillsRoot] = createSignal<string | null>(null);
 
 export function useSettings() {
+  async function restoreProvider() {
+    try {
+      const provider = await getActiveProvider();
+      if (provider) {
+        setActiveProvider(provider);
+        setIsConfigured(true);
+      }
+    } catch (e) {
+      console.error("恢复提供者配置失败:", e);
+    }
+  }
+
   return {
     isConfigured,
     setIsConfigured,
@@ -27,5 +40,6 @@ export function useSettings() {
     setActiveProvider,
     skillsRoot,
     setSkillsRoot,
+    restoreProvider,
   };
 }
