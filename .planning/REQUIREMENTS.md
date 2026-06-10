@@ -81,29 +81,29 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DATA-01 | Phase 1 | Pending |
-| DATA-02 | Phase 1 | Pending |
-| DATA-03 | Phase 1 | Pending |
-| SESSION-01 | Phase 1 | Pending |
-| SESSION-02 | Phase 1 | Pending |
-| SESSION-03 | Phase 1 | Pending |
-| SESSION-04 | Phase 1 | Pending |
-| PROVIDER-01 | Phase 1 | Pending |
-| PROVIDER-02 | Phase 1 | Pending |
-| PROVIDER-03 | Phase 1 | Pending |
-| TEST-01 | Phase 2 | Pending |
-| TEST-02 | Phase 2 | Pending |
-| TEST-03 | Phase 2 | Pending |
-| TEST-04 | Phase 2 | Pending |
-| DOC-01 | Phase 3 | Pending |
-| DOC-02 | Phase 3 | Pending |
-| DOC-03 | Phase 3 | Pending |
-| DOC-04 | Phase 3 | Pending |
-| UI-01 | Phase 4 | Pending |
-| UI-02 | Phase 4 | Pending |
-| SEC-01 | Phase 5 | Pending |
-| SEC-02 | Phase 5 | Pending |
-| SEC-03 | Phase 5 | Pending |
+| DATA-01 | Phase 1 — 数据持久化 | Pending |
+| DATA-02 | Phase 1 — 数据持久化 | Pending |
+| DATA-03 | Phase 1 — 数据持久化 | Pending |
+| SESSION-01 | Phase 1 — 数据持久化 | Pending |
+| SESSION-02 | Phase 1 — 数据持久化 | Pending |
+| SESSION-03 | Phase 1 — 数据持久化 | Pending |
+| SESSION-04 | Phase 1 — 数据持久化 | Pending |
+| PROVIDER-01 | Phase 1 — 数据持久化 | Pending |
+| PROVIDER-02 | Phase 1 — 数据持久化 | Pending |
+| PROVIDER-03 | Phase 1 — 数据持久化 | Pending |
+| TEST-01 | Phase 2 — 测试基建 | Pending |
+| TEST-02 | Phase 2 — 测试基建 | Pending |
+| TEST-03 | Phase 2 — 测试基建 | Pending |
+| TEST-04 | Phase 2 — 测试基建 | Pending |
+| DOC-01 | Phase 3 — 文档与界面真实化 | Pending |
+| DOC-02 | Phase 3 — 文档与界面真实化 | Pending |
+| DOC-03 | Phase 3 — 文档与界面真实化 | Pending |
+| DOC-04 | Phase 3 — 文档与界面真实化 | Pending |
+| UI-01 | Phase 3 — 文档与界面真实化 | Pending |
+| UI-02 | Phase 3 — 文档与界面真实化 | Pending |
+| SEC-01 | Phase 4 — 安全加固 | Pending |
+| SEC-02 | Phase 4 — 安全加固 | Pending |
+| SEC-03 | Phase 4 — 安全加固 | Pending |
 
 **Coverage:**
 - v1 requirements: 23 total
