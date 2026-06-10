@@ -1,8 +1,18 @@
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
+import { SolidMarkdown } from "solid-markdown";
+import remarkGfm from "remark-gfm";
 import { useConversation } from "../../stores/conversation";
 import { onChatStream } from "../../services/api";
 import { Icon } from "../icons/Icons";
 import "./ChatPanel.css";
+
+function AssistantContent(props: { text: string }) {
+  return (
+    <div class="prose chat-md">
+      <SolidMarkdown remarkPlugins={[remarkGfm]}>{props.text}</SolidMarkdown>
+    </div>
+  );
+}
 
 export interface ChatPanelProps {
   onSend: (text: string) => void;
@@ -107,9 +117,7 @@ export function ChatPanel(props: ChatPanelProps) {
               <div class="ava">墨</div>
               <div class="agent-body">
                 <div class="agent-name">墨律 · 法律文书助理</div>
-                <div class="prose">
-                  <p>描述你的起草需求，或在下方向我补充指示。</p>
-                </div>
+                <AssistantContent text="描述你的起草需求，或在下方向我补充指示。" />
               </div>
             </div>
           }
@@ -125,9 +133,7 @@ export function ChatPanel(props: ChatPanelProps) {
                   <div class="ava">墨</div>
                   <div class="agent-body">
                     <div class="agent-name">墨律 · 法律文书助理</div>
-                    <div class="prose">
-                      <p style={{ "white-space": "pre-wrap" }}>{m.content}</p>
-                    </div>
+                    <AssistantContent text={m.content} />
                   </div>
                 </div>
               )
@@ -139,9 +145,7 @@ export function ChatPanel(props: ChatPanelProps) {
             <div class="ava">墨</div>
             <div class="agent-body">
               <div class="agent-name">墨律 · 法律文书助理</div>
-              <div class="prose">
-                <p style={{ "white-space": "pre-wrap" }}>{streamingContent()}</p>
-              </div>
+              <AssistantContent text={streamingContent()} />
             </div>
           </div>
         </Show>

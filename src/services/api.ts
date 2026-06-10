@@ -54,6 +54,18 @@ export interface GenerateDocxRequest {
   output_path: string;
 }
 
+export interface LlmProvider {
+  id: string;
+  name: string;
+  display_name: string;
+  api_base_url: string;
+  api_key?: string;
+  model_name: string;
+  is_active: boolean;
+  config_json?: string;
+  created_at: string;
+}
+
 // Chat
 export async function sendMessage(req: SendMessageRequest): Promise<string> {
   return invoke("send_message", { req });
@@ -78,18 +90,6 @@ export async function getMessages(conversationId: string): Promise<Message[]> {
 
 export async function deleteConversation(conversationId: string): Promise<void> {
   return invoke("delete_conversation", { conversationId });
-}
-
-export interface LlmProvider {
-  id: string;
-  name: string;
-  display_name: string;
-  api_base_url: string;
-  api_key?: string;
-  model_name: string;
-  is_active: boolean;
-  config_json?: string;
-  created_at: string;
 }
 
 export async function getActiveProvider(): Promise<LlmProvider | null> {
@@ -117,6 +117,10 @@ export async function testProvider(req: ProviderSetupRequest): Promise<string> {
   return invoke("test_provider", { req });
 }
 
+export async function getSkillsRoot(): Promise<string | null> {
+  return invoke("get_skills_root");
+}
+
 export async function setSkillsRoot(path: string): Promise<number> {
   return invoke("set_skills_root", { path });
 }
@@ -129,8 +133,12 @@ export async function listSkills(): Promise<SkillMetadata[]> {
   return invoke("list_skills");
 }
 
-export async function setActiveSkill(conversationId: string, skillName: string): Promise<void> {
-  return invoke("set_active_skill", { conversationId, skillName });
+export async function getMcpHealth(): Promise<Record<string, boolean>> {
+  return invoke("get_mcp_health");
+}
+
+export async function parseLegalDocument(json: string): Promise<unknown> {
+  return invoke("parse_legal_document", { json });
 }
 
 // Files
@@ -149,17 +157,6 @@ export async function prepareAttachment(path: string): Promise<FileAttachment> {
 // Documents
 export async function generateDocx(req: GenerateDocxRequest): Promise<string> {
   return invoke("generate_docx", { req });
-}
-
-// Feedback
-export async function submitFeedback(req: {
-  message_id?: string;
-  conversation_id: string;
-  rating: number;
-  comment?: string;
-  context_json?: string;
-}): Promise<string> {
-  return invoke("submit_feedback", { req });
 }
 
 // Stream listener

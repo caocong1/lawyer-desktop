@@ -4,6 +4,7 @@ import {
   getActiveProvider,
   setupProvider,
   testProvider,
+  getSkillsRoot,
   setSkillsRoot,
   listSkills,
   getMcpHealth,
@@ -93,6 +94,18 @@ export function SettingsPanel(props: SettingsPanelProps) {
       setMcpHealth(await getMcpHealth());
     } catch {
       setMcpHealth({});
+    }
+
+    try {
+      const root = await getSkillsRoot();
+      if (root) {
+        setSkillsPath(root);
+        const loaded = await listSkills();
+        setSkills(loaded);
+        setSkillsCount(loaded.length);
+      }
+    } catch (e) {
+      console.error("加载技能路径失败:", e);
     }
   });
 
