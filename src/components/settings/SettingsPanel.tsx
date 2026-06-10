@@ -1,21 +1,24 @@
-import { Component, createSignal, onMount, For, Show } from "solid-js";
+import { createSignal, onMount, For, Show } from "solid-js";
 import {
   getProviderPresets,
+  getActiveProvider,
   setupProvider,
   testProvider,
   setSkillsRoot,
   listSkills,
+  getMcpHealth,
 } from "../../services/api";
-import type { ProviderPreset, SkillMetadata } from "../../services/api";
+import type { LlmProvider, ProviderPreset, SkillMetadata } from "../../services/api";
 import { useSettings } from "../../stores/settings";
 import "./SettingsPanel.css";
 
-interface SettingsPanelProps {
+export interface SettingsPanelProps {
   onClose: () => void;
+  onSaved?: (message: string) => void;
 }
 
-const SettingsPanel: Component<SettingsPanelProps> = (props) => {
-  const [activeTab, setActiveTab] = createSignal<"provider" | "skills" | "about">("provider");
+export function SettingsPanel(props: SettingsPanelProps) {
+  const [activeTab, setActiveTab] = createSignal<"provider" | "skills" | "mcp" | "about">("provider");
   const [presets, setPresets] = createSignal<ProviderPreset[]>([]);
   const [selectedPreset, setSelectedPreset] = createSignal<string>("qwen");
   const [apiKey, setApiKey] = createSignal("");
@@ -23,21 +26,73 @@ const SettingsPanel: Component<SettingsPanelProps> = (props) => {
   const [modelName, setModelName] = createSignal("");
   const [testResult, setTestResult] = createSignal<string | null>(null);
   const [testing, setTesting] = createSignal(false);
+  const [saving, setSaving] = createSignal(false);
+  const [hasSavedApiKey, setHasSavedApiKey] = createSignal(false);
   const [skillsPath, setSkillsPath] = createSignal("");
   const [skills, setSkills] = createSignal<SkillMetadata[]>([]);
   const [skillsCount, setSkillsCount] = createSignal(0);
+  const [mcpHealth, setMcpHealth] = createSignal<Record<string, boolean>>({});
 
   const { setIsConfigured, setActiveProvider } = useSettings();
 
+  type SavedProvider = Pick<
+    LlmProvider,
+    "name" | "display_name" | "api_base_url" | "model_name" | "api_key"
+  >;
+
+  function resolvePresetSelection(saved: SavedProvider, presetList: ProviderPreset[]): string {
+    if (saved.name === "custom") return "custom";
+    const preset = presetList.find((p) => p.name === saved.name);
+    if (!preset) return "custom";
+    if (saved.api_base_url !== preset.api_base_url) return "custom";
+    return saved.name;
+  }
+
+  async function resolveApiKeyForRequest(): Promise<string | undefined> {
+    const entered = apiKey().trim();
+    if (entered) return entered;
+    if (!hasSavedApiKey()) return undefined;
+    const saved = await getActiveProvider();
+    return saved?.api_key;
+  }
+
+  function applySavedProvider(saved: SavedProvider, presetList: ProviderPreset[]) {
+    const selection = resolvePresetSelection(saved, presetList);
+    setSelectedPreset(selection);
+    setBaseUrl(saved.api_base_url);
+    setModelName(saved.model_name);
+    setApiKey("");
+    setHasSavedApiKey(Boolean(saved.api_key));
+  }
+
   onMount(async () => {
+    let presetList: ProviderPreset[] = [];
     try {
-      const p = await getProviderPresets();
-      setPresets(p);
-      if (p.length > 0) {
-        selectPreset(p[0].name);
+      presetList = await getProviderPresets();
+      setPresets(presetList);
+    } catch (e) {
+      console.error("加载预设失败:", e);
+    }
+
+    try {
+      const saved = await getActiveProvider();
+      if (saved) {
+        applySavedProvider(saved, presetList);
+      } else if (presetList.length > 0) {
+        selectPreset(presetList[0].name);
+        setHasSavedApiKey(false);
       }
     } catch (e) {
-      console.error("Failed to load presets:", e);
+      console.error("加载已保存配置失败:", e);
+      if (presetList.length > 0) {
+        selectPreset(presetList[0].name);
+      }
+    }
+
+    try {
+      setMcpHealth(await getMcpHealth());
+    } catch {
+      setMcpHealth({});
     }
   });
 
@@ -47,7 +102,11 @@ const SettingsPanel: Component<SettingsPanelProps> = (props) => {
       setSelectedPreset(name);
       setBaseUrl(preset.api_base_url);
       setModelName(preset.default_model);
+    } else if (name === "custom") {
+      setSelectedPreset(name);
     }
+    setApiKey("");
+    setHasSavedApiKey(false);
   }
 
   async function handleTest() {
@@ -58,35 +117,59 @@ const SettingsPanel: Component<SettingsPanelProps> = (props) => {
         name: selectedPreset(),
         display_name: selectedPreset(),
         api_base_url: baseUrl(),
-        api_key: apiKey() || undefined,
+        api_key: await resolveApiKeyForRequest(),
         model_name: modelName(),
       });
       setTestResult(`✅ 连接成功: ${result}`);
-    } catch (e: any) {
-      setTestResult(`❌ 连接失败: ${e}`);
+    } catch (e) {
+      setTestResult(`❌ 连接失败: ${String(e)}`);
     }
     setTesting(false);
   }
 
   async function handleSave() {
+    if (!modelName().trim()) {
+      setTestResult("❌ 请填写模型名称");
+      return;
+    }
+    if (selectedPreset() === "custom" && !baseUrl().trim()) {
+      setTestResult("❌ 请填写 API Base URL");
+      return;
+    }
+
+    setSaving(true);
+    setTestResult(null);
     try {
+      const preset = presets().find((p) => p.name === selectedPreset());
+      const displayName =
+        selectedPreset() === "custom" ? "自定义" : (preset?.display_name ?? selectedPreset());
+
+      const resolvedApiKey = await resolveApiKeyForRequest();
       await setupProvider({
         name: selectedPreset(),
-        display_name: selectedPreset(),
+        display_name: displayName,
         api_base_url: baseUrl(),
-        api_key: apiKey() || undefined,
+        api_key: resolvedApiKey,
         model_name: modelName(),
       });
       setIsConfigured(true);
       setActiveProvider({
         name: selectedPreset(),
-        display_name: selectedPreset(),
+        display_name: displayName,
         api_base_url: baseUrl(),
-        api_key: apiKey() || undefined,
+        api_key: resolvedApiKey,
         model_name: modelName(),
       });
+      setHasSavedApiKey(Boolean(resolvedApiKey));
+      setTestResult("✅ 已保存并启用");
+      props.onSaved?.("模型配置已保存");
+      props.onClose();
     } catch (e) {
-      console.error("Failed to save provider:", e);
+      const message = e instanceof Error ? e.message : String(e);
+      setTestResult(`❌ 保存失败: ${message}`);
+      console.error("保存配置失败:", e);
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -98,7 +181,7 @@ const SettingsPanel: Component<SettingsPanelProps> = (props) => {
       const loaded = await listSkills();
       setSkills(loaded);
     } catch (e) {
-      console.error("Failed to set skills root:", e);
+      console.error("加载技能失败:", e);
     }
   }
 
@@ -107,25 +190,35 @@ const SettingsPanel: Component<SettingsPanelProps> = (props) => {
       <div class="settings-panel" onClick={(e) => e.stopPropagation()}>
         <div class="settings-header">
           <h2>设置</h2>
-          <button class="close-btn" onClick={props.onClose}>
+          <button type="button" class="close-btn" onClick={props.onClose}>
             ×
           </button>
         </div>
 
         <div class="settings-tabs">
           <button
+            type="button"
             class={`tab ${activeTab() === "provider" ? "active" : ""}`}
             onClick={() => setActiveTab("provider")}
           >
             LLM 模型
           </button>
           <button
+            type="button"
             class={`tab ${activeTab() === "skills" ? "active" : ""}`}
             onClick={() => setActiveTab("skills")}
           >
             法律技能
           </button>
           <button
+            type="button"
+            class={`tab ${activeTab() === "mcp" ? "active" : ""}`}
+            onClick={() => setActiveTab("mcp")}
+          >
+            MCP
+          </button>
+          <button
+            type="button"
             class={`tab ${activeTab() === "about" ? "active" : ""}`}
             onClick={() => setActiveTab("about")}
           >
@@ -142,9 +235,7 @@ const SettingsPanel: Component<SettingsPanelProps> = (props) => {
                 onChange={(e) => selectPreset(e.currentTarget.value)}
               >
                 <For each={presets()}>
-                  {(preset) => (
-                    <option value={preset.name}>{preset.display_name}</option>
-                  )}
+                  {(preset) => <option value={preset.name}>{preset.display_name}</option>}
                 </For>
                 <option value="custom">自定义 (OpenAI 兼容)</option>
               </select>
@@ -168,7 +259,9 @@ const SettingsPanel: Component<SettingsPanelProps> = (props) => {
                 type="password"
                 value={apiKey()}
                 onInput={(e) => setApiKey(e.currentTarget.value)}
-                placeholder="输入 API Key"
+                placeholder={
+                  hasSavedApiKey() ? "已保存，留空则不修改" : "输入 API Key"
+                }
               />
             </div>
 
@@ -183,11 +276,16 @@ const SettingsPanel: Component<SettingsPanelProps> = (props) => {
             </div>
 
             <div class="form-actions">
-              <button class="btn-secondary" onClick={handleTest} disabled={testing()}>
+              <button type="button" class="btn-secondary" onClick={handleTest} disabled={testing()}>
                 {testing() ? "测试中..." : "测试连接"}
               </button>
-              <button class="btn-primary" onClick={handleSave}>
-                保存并启用
+              <button
+                type="button"
+                class="btn-primary"
+                onClick={handleSave}
+                disabled={saving() || testing()}
+              >
+                {saving() ? "保存中..." : "保存并启用"}
               </button>
             </div>
 
@@ -206,7 +304,7 @@ const SettingsPanel: Component<SettingsPanelProps> = (props) => {
                 placeholder="如: C:\Users\...\ai-for-china-legal"
               />
             </div>
-            <button class="btn-primary" onClick={handleSetSkillsRoot}>
+            <button type="button" class="btn-primary" onClick={handleSetSkillsRoot}>
               加载技能
             </button>
             <Show when={skillsCount() > 0}>
@@ -225,11 +323,28 @@ const SettingsPanel: Component<SettingsPanelProps> = (props) => {
             </Show>
           </Show>
 
+          <Show when={activeTab() === "mcp"}>
+            <p class="skills-count">法规数据库等 MCP 连接器状态</p>
+            <div class="skills-list">
+              <For each={Object.entries(mcpHealth())}>
+                {([name, ok]) => (
+                  <div class="skill-item">
+                    <strong>{name}</strong>
+                    <span class={ok ? "mcp-ok" : "mcp-off"}>{ok ? "在线" : "离线"}</span>
+                  </div>
+                )}
+              </For>
+            </div>
+            <Show when={Object.keys(mcpHealth()).length === 0}>
+              <p class="skill-desc">未配置 MCP 服务器，或 LAW_DB_API_KEY 未设置</p>
+            </Show>
+          </Show>
+
           <Show when={activeTab() === "about"}>
             <div class="about-content">
-              <h3>律师助手 (Lawyer Desktop)</h3>
+              <h3>墨律 Inkstatute</h3>
               <p>版本 0.1.0</p>
-              <p>面向中国大陆执业律师的 AI 桌面助手</p>
+              <p>面向中国大陆执业律师的 AI 法律文书桌面助手</p>
               <p class="disclaimer">
                 声明：本工具所有输出均为供律师审查的草稿，非法律建议，非法律结论，不能替代执业律师。
               </p>
@@ -239,6 +354,4 @@ const SettingsPanel: Component<SettingsPanelProps> = (props) => {
       </div>
     </div>
   );
-};
-
-export default SettingsPanel;
+}
