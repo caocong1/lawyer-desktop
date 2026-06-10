@@ -24,6 +24,7 @@ tauri-plugin-sql = { version = "2", features = ["sqlite"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-shell = "2"
+tauri-plugin-mcp-bridge = "0.11"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", features = ["stream", "json"] }
@@ -39,4 +40,8 @@ anyhow = "1"
 thiserror = "2"
 log = "0.4"
 env_logger = "0.11"
+serde_yaml = "0.9"
+sha2 = "0.10"
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
+dotenvy = "0.15"
 

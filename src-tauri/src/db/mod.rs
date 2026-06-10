@@ -1,4 +1,5 @@
 pub mod models;
+pub mod queries;
 
 use tauri_plugin_sql::{Migration, MigrationKind};
 
