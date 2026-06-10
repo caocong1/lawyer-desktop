@@ -19,6 +19,7 @@ export function Workspace(props: WorkspaceProps) {
     sendChatMessage,
     activeConversationId,
     messages,
+    citationGroups,
     setCiteState,
     citeState,
   } = useConversation();
@@ -98,16 +99,10 @@ export function Workspace(props: WorkspaceProps) {
     }
   }
 
-  function onLocate(c: { key: string }) {
-    const map: Record<string, string> = {
-      law1: "a1",
-      law2: "a2",
-      law3: "a3",
-      case1: "a3",
-      case2: "a2",
-    };
-    scrollDocTo(`#art-${map[c.key] || "a1"}`);
-    props.onToast("已定位到相关条款");
+  function onLocate(c: { key: string; clauseId?: string }) {
+    const anchor = c.clauseId ? `#art-${c.clauseId}` : undefined;
+    scrollDocTo(anchor);
+    props.onToast(anchor ? "已定位到相关条款" : "未找到对应条款");
   }
 
   const cite = () => citeState();
@@ -117,10 +112,11 @@ export function Workspace(props: WorkspaceProps) {
       <ChatPanel onSend={onSend} sending={sending} />
       <DocPreview
         onCite={openCite}
-        onRisk={() => openCite("law3")}
-        onFix={() =>
-          onSend("请补充股权过户登记的时限与逾期违约金条款。")
-        }
+        onRisk={() => {
+          const law = citationGroups().law[0];
+          if (law) openCite(law.key);
+        }}
+        onFix={() => onSend("请根据风险提示补充或修改相关条款。")}
         onToggleCite={(force) =>
           setCiteState((c) => ({ ...c, open: force === true ? true : !c.open }))
         }

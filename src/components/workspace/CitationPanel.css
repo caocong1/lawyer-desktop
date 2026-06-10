@@ -1,1 +1,9 @@
 /* Citation panel — see molv-base.css */
+
+.cp-empty {
+  padding: 32px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.6;
+}

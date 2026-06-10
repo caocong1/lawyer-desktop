@@ -1,1 +1,32 @@
 /* Document preview — see molv-base.css */
+
+.doc-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 280px;
+  padding: 48px 24px;
+  color: var(--muted);
+  text-align: center;
+  gap: 12px;
+}
+
+.doc-empty svg {
+  width: 40px;
+  height: 40px;
+  stroke: var(--line);
+  fill: none;
+  stroke-width: 1.5;
+  opacity: 0.7;
+}
+
+.doc-empty p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.doc-empty .sub {
+  font-size: 12.5px;
+  opacity: 0.75;
+}

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { FileAttachment, Conversation, Message } from "../stores/conversation";
+import type { ParseLegalDocumentResponse } from "../types/legal";
 
 export interface SendMessageRequest {
   conversation_id: string;
@@ -52,6 +53,12 @@ export interface GenerateDocxRequest {
   content_markdown: string;
   template?: string;
   output_path: string;
+  conversation_id?: string;
+}
+
+export interface ParseLegalDocumentRequest {
+  json_content: string;
+  conversation_id?: string;
 }
 
 export interface LlmProvider {
@@ -137,8 +144,10 @@ export async function getMcpHealth(): Promise<Record<string, boolean>> {
   return invoke("get_mcp_health");
 }
 
-export async function parseLegalDocument(json: string): Promise<unknown> {
-  return invoke("parse_legal_document", { json });
+export async function parseLegalDocument(
+  req: ParseLegalDocumentRequest,
+): Promise<ParseLegalDocumentResponse> {
+  return invoke("parse_legal_document", { req });
 }
 
 // Files
