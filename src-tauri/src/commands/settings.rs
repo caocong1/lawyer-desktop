@@ -1,10 +1,13 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
+use sqlx::{Pool, Sqlite};
+use uuid::Uuid;
+use chrono::Utc;
 
+use crate::db;
 use crate::llm::{self, LlmEngine, ProviderPreset};
 use crate::llm::types::ProviderConfig;
 use crate::skills::SkillRegistry;
-use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderSetupRequest {
@@ -23,20 +26,40 @@ pub async fn get_provider_presets() -> Result<Vec<ProviderPreset>, String> {
 #[tauri::command]
 pub async fn setup_provider(
     engine: State<'_, LlmEngine>,
+    db: State<'_, Pool<Sqlite>>,
     req: ProviderSetupRequest,
 ) -> Result<(), String> {
     let config = ProviderConfig {
+        id: Uuid::new_v4().to_string(),
+        name: req.name.clone(),
+        display_name: req.display_name.clone(),
+        api_base_url: req.api_base_url.clone(),
+        api_key: req.api_key.clone(),
+        model_name: req.model_name.clone(),
+        temperature: None,
+        max_tokens: None,
+    };
+
+    engine.set_provider(config).await.map_err(|e| e.to_string())?;
+
+    // Persist provider to DB (best-effort)
+    let now = Utc::now().to_rfc3339();
+    let provider = db::models::LlmProvider {
         id: Uuid::new_v4().to_string(),
         name: req.name,
         display_name: req.display_name,
         api_base_url: req.api_base_url,
         api_key: req.api_key,
         model_name: req.model_name,
-        temperature: None,
-        max_tokens: None,
+        is_active: true,
+        config_json: None,
+        created_at: now,
     };
+    if let Err(e) = db::queries::save_provider(&db, &provider).await {
+        log::warn!("Failed to persist provider to DB: {}", e);
+    }
 
-    engine.set_provider(config).await.map_err(|e| e.to_string())
+    Ok(())
 }
 
 #[tauri::command]
@@ -103,4 +126,19 @@ pub async fn reload_skills(skills: State<'_, SkillRegistry>) -> Result<usize, St
 #[tauri::command]
 pub async fn list_skills(skills: State<'_, SkillRegistry>) -> Result<Vec<crate::skills::loader::SkillMetadata>, String> {
     Ok(skills.get_skills().await)
+}
+
+#[tauri::command]
+pub async fn get_active_provider(
+    db: State<'_, Pool<Sqlite>>,
+) -> Result<Option<db::models::LlmProvider>, String> {
+    db::queries::get_active_provider(&db).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_active_conversation(
+    db: State<'_, Pool<Sqlite>>,
+    conversation_id: String,
+) -> Result<(), String> {
+    db::queries::set_active_conversation_id(&db, &conversation_id).await.map_err(|e| e.to_string())
 }

@@ -93,6 +93,10 @@ export async function listSkills(): Promise<SkillMetadata[]> {
   return invoke("list_skills");
 }
 
+export async function setActiveSkill(conversationId: string, skillName: string): Promise<void> {
+  return invoke("set_active_skill", { conversationId, skillName });
+}
+
 // Files
 export async function readFileContent(path: string): Promise<string> {
   return invoke("read_file_content", { path });

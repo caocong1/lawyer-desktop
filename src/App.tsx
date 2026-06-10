@@ -1,71 +1,69 @@
-import { Component, createSignal, onMount, Show } from "solid-js";
+import { Component, createSignal, Show, createEffect } from "solid-js";
 import TitleBar from "./components/layout/TitleBar";
 import SideNav from "./components/layout/SideNav";
-import ChatArea from "./components/chat/ChatArea";
-import StatusBar from "./components/layout/StatusBar";
+import HomePage from "./components/home/HomePage";
+import Workspace from "./components/workspace/Workspace";
 import SettingsPanel from "./components/settings/SettingsPanel";
-import { useTheme } from "./stores/theme";
 import { useConversation } from "./stores/conversation";
 import { createConversation } from "./services/api";
-import "./themes/stitch-dark.css";
+import "./themes/molv-tokens.css";
+import "./themes/molv-base.css";
 import "./App.css";
 
 const App: Component = () => {
-  const [activeSection, setActiveSection] = createSignal("chat");
+  const [view, setView] = createSignal<"home" | "workspace">("home");
   const [showSettings, setShowSettings] = createSignal(false);
-  const { theme } = useTheme();
-  const { addConversation, selectConversation, activeConversationId } = useConversation();
+  const [toast, setToast] = createSignal<{ msg: string; show: boolean }>({ msg: "", show: false });
+  const [docReady, setDocReady] = createSignal(false);
 
-  onMount(async () => {
-    document.documentElement.setAttribute("data-theme", "dark");
-    // Load Material Symbols font
-    const link = document.createElement("link");
-    link.href = "https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap";
-    link.rel = "stylesheet";
-    document.head.appendChild(link);
+  const { activeConversationId } = useConversation();
 
-    // 启动时自动创建一个会话
-    try {
-      const conv = await createConversation();
-      addConversation(conv);
-      selectConversation(conv.id);
-      console.log("[App] 初始会话已创建:", conv.id);
-    } catch (e) {
-      console.error("[App] 创建初始会话失败:", e);
-    }
-  });
+  function showToast(msg: string) {
+    setToast({ msg, show: true });
+    setTimeout(() => setToast({ msg: "", show: false }), 2500);
+  }
 
-  async function handleNewChat() {
-    try {
-      const conv = await createConversation();
-      addConversation(conv);
-      selectConversation(conv.id);
-    } catch (e) {
-      console.error("Failed to create conversation:", e);
-    }
+  function handleStart(prompt: string) {
+    setView("workspace");
+    setDocReady(true);
+    showToast("开始起草：" + prompt.slice(0, 30));
   }
 
   function handleNavigate(section: string) {
     if (section === "settings") {
       setShowSettings(true);
-      return;
-    }
-    setActiveSection(section);
-    if (section === "chat" && !activeConversationId()) {
-      handleNewChat();
+    } else if (section === "home") {
+      setView("home");
     }
   }
+
+  createEffect(async () => {
+    if (!activeConversationId()) {
+      try {
+        await createConversation();
+      } catch (e) {
+        console.error("[App] 创建初始会话失败:", e);
+      }
+    }
+  });
 
   return (
     <div class="app">
       <TitleBar />
-      <div class="app-body">
-        <SideNav onNavigate={handleNavigate} activeSection={activeSection()} />
-        <ChatArea />
+      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+        <SideNav onNavigate={handleNavigate} />
+        <Show when={view() === "home"}>
+          <HomePage onStart={handleStart} onToast={showToast} />
+        </Show>
+        <Show when={view() === "workspace"}>
+          <Workspace docReady={docReady()} onToast={showToast} />
+        </Show>
       </div>
-      <StatusBar />
       <Show when={showSettings()}>
         <SettingsPanel onClose={() => setShowSettings(false)} />
+      </Show>
+      <Show when={toast().show}>
+        <div class="toast">{toast().msg}</div>
       </Show>
     </div>
   );
