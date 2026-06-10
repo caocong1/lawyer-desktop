@@ -1,8 +1,11 @@
-import { createSignal, Show, onMount } from "solid-js";
+import { createSignal, Show, onMount, lazy, Suspense } from "solid-js";
 import { HomePage } from "./components/home/HomePage";
 import { TitleBar } from "./components/layout/TitleBar";
-import { Workspace } from "./components/workspace/Workspace";
 import { SettingsPanel } from "./components/settings/SettingsPanel";
+
+const Workspace = lazy(() =>
+  import("./components/workspace/Workspace").then((m) => ({ default: m.Workspace })),
+);
 import { useSettings } from "./stores/settings";
 import { useConversation } from "./stores/conversation";
 import { createConversation } from "./services/api";
@@ -107,12 +110,14 @@ export default function App() {
           }
         >
           <div class="screen anim">
-            <Workspace
-              draftKey={draftKey()}
-              prompt={prompt()}
-              onToast={showToast}
-              toast={toast()}
-            />
+            <Suspense fallback={<div class="loading-overlay"><div class="loading-spinner" /><span>加载工作区…</span></div>}>
+              <Workspace
+                draftKey={draftKey()}
+                prompt={prompt()}
+                onToast={showToast}
+                toast={toast()}
+              />
+            </Suspense>
           </div>
         </Show>
       </div>
