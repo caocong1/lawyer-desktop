@@ -1,5 +1,4 @@
 import { createSignal, Show, onMount } from "solid-js";
-import { seed } from "./data/seed";
 import { HomePage } from "./components/home/HomePage";
 import { TitleBar } from "./components/layout/TitleBar";
 import { Workspace } from "./components/workspace/Workspace";
@@ -14,12 +13,12 @@ type Screen = "home" | "workspace";
 export default function App() {
   const [screen, setScreen] = createSignal<Screen>("home");
   const [draftKey, setDraftKey] = createSignal(0);
-  const [prompt, setPrompt] = createSignal<string>(seed.promptText);
+  const [prompt, setPrompt] = createSignal<string>("");
   const [toast, setToast] = createSignal("");
   const [settingsOpen, setSettingsOpen] = createSignal(false);
   const [loading, setLoading] = createSignal(true);
   const { restoreProvider, isConfigured } = useSettings();
-  const { loadConversations, activeConversationId, setActiveConversationId, addConversation } =
+  const { loadConversations, activeConversationId, setActiveConversationId, addConversation, switchConversation, messages } =
     useConversation();
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -67,12 +66,17 @@ export default function App() {
     }
   }
 
-  function pickType(id: string) {
-    if (id === "equity") {
-      void start(seed.promptText);
-      return;
-    }
-    showToast("该文书类型为演示占位，当前以「股权转让协议」展示完整流程");
+  function pickType(prompt: string) {
+    void start(prompt);
+  }
+
+  async function openRecent(id: string) {
+    await switchConversation(id);
+    const msgs = messages();
+    const firstUser = msgs.find((m) => m.role === "user");
+    setPrompt(firstUser?.content || "");
+    setDraftKey((k) => k + 1);
+    setScreen("workspace");
   }
 
   return (
@@ -97,7 +101,7 @@ export default function App() {
               <HomePage
                 onStart={(p) => void start(p)}
                 onPickType={pickType}
-                onOpenRecent={() => void start(seed.promptText)}
+                onOpenRecent={(id) => void openRecent(id)}
               />
             </div>
           }
