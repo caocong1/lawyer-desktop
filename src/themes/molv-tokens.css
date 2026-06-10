@@ -1,0 +1,187 @@
+/* ============================================================
+   墨律 Inkstatute · 主题令牌
+   三套配色：A 传统律所（默认）/ B 深色法务终端 / C 克制现代
+   切换方式：在根节点设置 data-theme="a|b|c"
+   ============================================================ */
+@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;600;700;900&family=Noto+Sans+SC:wght@300;400;500;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=Spline+Sans+Mono:wght@400;500;600&display=swap');
+
+:root {
+  --serif: "Noto Serif SC", "Newsreader", Georgia, serif;
+  --serif-latin: "Newsreader", "Noto Serif SC", Georgia, serif;
+  --sans: "Noto Sans SC", -apple-system, "Segoe UI", system-ui, sans-serif;
+  --mono: "Spline Sans Mono", "SF Mono", ui-monospace, monospace;
+
+  --doc-scale: 1;
+  --speed: 1;
+}
+
+:root, [data-theme="a"] {
+  --app-bg: #f4ede0;
+  --chat-bg: #efe7d7;
+  --surface: #fbf7ef;
+  --surface-2: #f6f0e4;
+  --doc-canvas: #f0e8d9;
+  --ink: #2a2521;
+  --ink-soft: #5b5349;
+  --muted: #8c8275;
+  --line: #ddd2bd;
+  --line-soft: #e7ddca;
+  --accent: #74302d;
+  --accent-2: #8a3a37;
+  --accent-soft: #f1e3cf;
+  --accent-dim: rgba(116,48,45,.07);
+  --on-accent: #f4e3cf;
+  --gold: #a3823f;
+  --gold-soft: #c2a565;
+  --amber: #b5832a;
+
+  --titlebar-bg: linear-gradient(#efe6d6, #e9dfcc);
+  --titlebar-line: #ddd2bd;
+  --seal-bg: #74302d;
+  --seal-text: #f4e3cf;
+  --seal-radius: 6px;
+
+  --user-bg: #fbf7ef;
+  --user-text: #2a2521;
+  --user-border: #ddd2bd;
+  --user-round: 12px 12px 4px 12px;
+
+  --sheet-bg: #fbf7ef;
+  --sheet-border: #ddd2bd;
+  --sheet-shadow: 0 1px 0 #fff inset, 0 14px 40px -18px rgba(60,40,20,.35), 0 2px 6px rgba(60,40,20,.08);
+  --sheet-radius: 3px;
+  --sheet-accentbar: linear-gradient(90deg, #74302d, #a3823f 60%, #74302d);
+  --sheet-pad: 56px 64px 64px;
+  --sheet-ink: #2a2521;
+  --sheet-ink-2: #38322b;
+  --sheet-line: #ddd2bd;
+  --sheet-ul: #cdbfa3;
+  --sheet-accent: #74302d;
+  --sheet-cite: #a3823f;
+  --doc-risk-bg: #f6ecd4;
+  --doc-risk-line: #b5832a;
+  --doc-risk-hl: #f4e6c4;
+  --doc-risk-ink: #6b572b;
+  --en-style: italic;
+  --en-font: var(--serif-latin);
+  --en-spacing: .12em;
+  --en-upper: none;
+  --cite-font: var(--serif-latin);
+
+  --radius: 12px;
+  --shadow-pop: 0 18px 50px -16px rgba(60,40,20,.4), 0 4px 12px rgba(60,40,20,.12);
+}
+
+[data-theme="b"] {
+  --app-bg: #13161d;
+  --chat-bg: #171b23;
+  --surface: #1c212b;
+  --surface-2: #20262f;
+  --doc-canvas: radial-gradient(760px 460px at 50% -4%, #1a212c, #13161d);
+  --ink: #e8eaf0;
+  --ink-soft: #aab2c2;
+  --muted: #727b8c;
+  --line: #272d39;
+  --line-soft: #20252f;
+  --accent: #6b9bff;
+  --accent-2: #4d79d6;
+  --accent-soft: rgba(107,155,255,.13);
+  --accent-dim: rgba(107,155,255,.08);
+  --on-accent: #ffffff;
+  --gold: #57c8c0;
+  --gold-soft: rgba(87,200,192,.4);
+  --amber: #e0a23a;
+
+  --titlebar-bg: rgba(22,26,33,.97);
+  --titlebar-line: #272d39;
+  --seal-bg: linear-gradient(135deg,#6b9bff,#4d79d6);
+  --seal-text: #ffffff;
+  --seal-radius: 7px;
+
+  --user-bg: linear-gradient(160deg,#232a36,#1d232d);
+  --user-text: #e8eaf0;
+  --user-border: #2b3340;
+  --user-round: 13px 13px 4px 13px;
+
+  --sheet-bg: #fdfcf9;
+  --sheet-border: rgba(0,0,0,.22);
+  --sheet-shadow: 0 18px 46px -22px rgba(0,0,0,.7);
+  --sheet-radius: 6px;
+  --sheet-accentbar: transparent;
+  --sheet-pad: 54px 62px 62px;
+  --sheet-ink: #1d1a16;
+  --sheet-ink-2: #34302a;
+  --sheet-line: #d8d2c4;
+  --sheet-ul: #c9c2b4;
+  --sheet-accent: #4d79d6;
+  --sheet-cite: #4d79d6;
+  --doc-risk-bg: #fbf2dd;
+  --doc-risk-line: #d99a28;
+  --doc-risk-hl: rgba(224,162,58,.2);
+  --doc-risk-ink: #6b5a30;
+  --en-style: normal;
+  --en-font: var(--mono);
+  --en-spacing: .18em;
+  --en-upper: uppercase;
+  --cite-font: var(--mono);
+
+  --radius: 13px;
+  --shadow-pop: 0 22px 60px -18px rgba(0,0,0,.7), 0 4px 14px rgba(0,0,0,.4);
+}
+
+[data-theme="c"] {
+  --app-bg: #ffffff;
+  --chat-bg: #fafaf8;
+  --surface: #ffffff;
+  --surface-2: #fafaf8;
+  --doc-canvas: #ffffff;
+  --ink: #19191a;
+  --ink-soft: #54534f;
+  --muted: #97968f;
+  --line: #ededea;
+  --line-soft: #f3f3f0;
+  --accent: #1f5132;
+  --accent-2: #2f6b45;
+  --accent-soft: #eef3ee;
+  --accent-dim: rgba(31,81,50,.05);
+  --on-accent: #ffffff;
+  --gold: #1f5132;
+  --gold-soft: #cdd9cf;
+  --amber: #9a6b1a;
+
+  --titlebar-bg: #ffffff;
+  --titlebar-line: #ededea;
+  --seal-bg: #1f5132;
+  --seal-text: #ffffff;
+  --seal-radius: 6px;
+
+  --user-bg: #19191a;
+  --user-text: #f4f4f0;
+  --user-border: transparent;
+  --user-round: 14px 14px 5px 14px;
+
+  --sheet-bg: #ffffff;
+  --sheet-border: transparent;
+  --sheet-shadow: none;
+  --sheet-radius: 0px;
+  --sheet-accentbar: transparent;
+  --sheet-pad: 8px 8px 40px;
+  --sheet-ink: #19191a;
+  --sheet-ink-2: #38362f;
+  --sheet-line: #ededea;
+  --sheet-ul: #d8d8d2;
+  --sheet-accent: #1f5132;
+  --sheet-cite: #1f5132;
+  --doc-risk-bg: #fbf3e0;
+  --doc-risk-line: #9a6b1a;
+  --doc-risk-hl: #fbf3e0;
+  --doc-risk-ink: #6f5a2c;
+  --en-style: normal;
+  --en-font: var(--sans);
+  --en-spacing: .22em;
+  --en-upper: uppercase;
+  --cite-font: var(--sans);
+
+  --radius: 14px;
+  --shadow-pop: 0 20px 56px -18px rgba(0,0,0,.18), 0 4px 14px rgba(0,0,0,.08);
+}

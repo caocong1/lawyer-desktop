@@ -34,33 +34,13 @@ pub struct LlmProvider {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RegisteredSkill {
+pub struct LegalDocument {
     pub id: String,
-    pub plugin_name: String,
-    pub skill_name: String,
-    pub description: String,
-    pub skill_md_path: String,
-    pub argument_hint: Option<String>,
-    pub is_enabled: bool,
-    pub updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Feedback {
-    pub id: String,
-    pub message_id: Option<String>,
-    pub conversation_id: String,
-    pub rating: i32,
-    pub comment: Option<String>,
-    pub context_json: Option<String>,
+    pub conversation_id: Option<String>,
+    pub title: String,
+    pub document_json: String,
+    pub version: i32,
     pub created_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PracticeProfile {
-    pub id: String,
-    pub plugin_name: String,
-    pub profile_content: String,
     pub updated_at: String,
 }
 

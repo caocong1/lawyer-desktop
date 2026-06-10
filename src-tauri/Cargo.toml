@@ -1,18 +1,18 @@
 [package]
 name = "lawyer-desktop"
 version = "0.1.0"
-description = "A Tauri App"
+description = "墨律 Inkstatute — AI legal assistant for Chinese lawyers"
 authors = ["you"]
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+default-run = "lawyer-desktop"
 
 [lib]
-# The `_lib` suffix may seem redundant but it is necessary
-# to make the lib name unique and wouldn't conflict with the bin name.
-# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "lawyer_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[example]]
+name = "probe_llm_tools"
+path = "src/bin/probe_llm_tools.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -23,7 +23,6 @@ tauri-plugin-opener = "2"
 tauri-plugin-sql = { version = "2", features = ["sqlite"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
-tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", features = ["stream", "json"] }
@@ -41,6 +40,12 @@ log = "0.4"
 env_logger = "0.11"
 serde_yaml = "0.9"
 sha2 = "0.10"
+walkdir = "2"
+encoding_rs = "0.8"
+hex = "0.4"
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
 dotenvy = "0.15"
-
+aes-gcm = "0.10"
+base64 = "0.22"
+rand = "0.8"
+tauri-plugin-mcp-bridge = "0.11.2"

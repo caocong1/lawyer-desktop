@@ -19,6 +19,7 @@ export function Workspace(props: WorkspaceProps) {
     sendChatMessage,
     activeConversationId,
     messages,
+    pendingContextRefs,
     citationGroups,
     setCiteState,
     citeState,
@@ -44,12 +45,17 @@ export function Workspace(props: WorkspaceProps) {
         if (cancelled || generation !== initGeneration) return;
 
         const trimmed = prompt.trim();
-        if (trimmed) {
+        const hasRefs = pendingContextRefs().length > 0;
+        if (trimmed || hasRefs) {
           const alreadySent = messages().some(
-            (m) => m.role === "user" && m.content.trim() === trimmed,
+            (m) =>
+              m.role === "user" &&
+              (trimmed ? m.content.trim() === trimmed : m.content.includes("已附加")),
           );
           if (!alreadySent) {
-            await sendChatMessage(trimmed);
+            void sendChatMessage(trimmed).catch((e) => {
+              if (!cancelled) props.onToast(`发送失败: ${String(e)}`);
+            });
           }
         }
       } catch (e) {
@@ -88,15 +94,11 @@ export function Workspace(props: WorkspaceProps) {
     }, 360);
   }
 
-  async function onSend(text: string) {
+  function onSend(text: string) {
     setSending(true);
-    try {
-      await sendChatMessage(text);
-    } catch (e) {
-      props.onToast(`发送失败: ${String(e)}`);
-    } finally {
-      setSending(false);
-    }
+    void sendChatMessage(text)
+      .catch((e) => props.onToast(`发送失败: ${String(e)}`))
+      .finally(() => setSending(false));
   }
 
   function onLocate(c: { key: string; clauseId?: string }) {

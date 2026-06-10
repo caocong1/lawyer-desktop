@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::Client;
 use std::sync::Arc;
+use std::time::Duration;
 
 use super::provider::{ChatStream, LlmProvider};
 use super::types::{ChatRequest, ChatResponse, ProviderConfig};
@@ -14,24 +15,35 @@ pub struct OpenAiCompatProvider {
 
 impl OpenAiCompatProvider {
     pub fn new(config: ProviderConfig) -> Self {
+        let client = Client::builder()
+            .connect_timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(300))
+            .build()
+            .unwrap_or_else(|_| Client::new());
         Self {
             config,
-            client: Arc::new(Client::new()),
+            client: Arc::new(client),
         }
     }
 
     fn build_request(&self, chat_request: &ChatRequest) -> Result<reqwest::RequestBuilder> {
-        let url = format!("{}/chat/completions", self.config.api_base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/chat/completions",
+            self.config.api_base_url.trim_end_matches('/')
+        );
 
-        let mut builder = self.client.post(&url)
+        let mut builder = self
+            .client
+            .post(&url)
             .header("Content-Type", "application/json");
 
         if let Some(ref api_key) = self.config.api_key {
-            builder = builder.bearer_auth(api_key);
+            if !api_key.is_empty() {
+                builder = builder.bearer_auth(api_key);
+            }
         }
 
-        let body = serde_json::to_string(chat_request)
-            .context("Failed to serialize chat request")?;
+        let body = serde_json::to_string(chat_request).context("Failed to serialize chat request")?;
 
         Ok(builder.body(body))
     }
@@ -44,7 +56,8 @@ impl LlmProvider for OpenAiCompatProvider {
         req.model = self.config.model_name.clone();
         req.stream = false;
 
-        let response = self.build_request(&req)?
+        let response = self
+            .build_request(&req)?
             .send()
             .await
             .context("Failed to send request to LLM provider")?;
@@ -68,7 +81,8 @@ impl LlmProvider for OpenAiCompatProvider {
         req.model = self.config.model_name.clone();
         req.stream = true;
 
-        let response = self.build_request(&req)?
+        let response = self
+            .build_request(&req)?
             .send()
             .await
             .context("Failed to send streaming request")?;
@@ -79,16 +93,14 @@ impl LlmProvider for OpenAiCompatProvider {
             anyhow::bail!("LLM API error ({}): {}", status, body);
         }
 
-        let stream = response
-            .bytes_stream()
-            .map(|result| {
-                result
-                    .map_err(|e| anyhow::anyhow!("Stream error: {}", e))
-                    .and_then(|bytes| {
-                        String::from_utf8(bytes.to_vec())
-                            .map_err(|e| anyhow::anyhow!("UTF-8 error: {}", e))
-                    })
-            });
+        let stream = response.bytes_stream().map(|result| {
+            result
+                .map_err(|e| anyhow::anyhow!("Stream error: {}", e))
+                .and_then(|bytes| {
+                    String::from_utf8(bytes.to_vec())
+                        .map_err(|e| anyhow::anyhow!("UTF-8 error: {}", e))
+                })
+        });
 
         Ok(Box::pin(stream))
     }

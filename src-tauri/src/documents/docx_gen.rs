@@ -6,14 +6,12 @@ pub fn generate_docx(title: &str, content_markdown: &str, output_path: &Path) ->
 
     let mut doc = Docx::new();
 
-    // Title
     doc = doc.add_paragraph(
         Paragraph::new()
             .add_run(Run::new().add_text(title))
             .style("Heading1"),
     );
 
-    // Disclaimer
     doc = doc.add_paragraph(
         Paragraph::new().add_run(
             Run::new()
@@ -23,10 +21,8 @@ pub fn generate_docx(title: &str, content_markdown: &str, output_path: &Path) ->
         ),
     );
 
-    // Empty line
     doc = doc.add_paragraph(Paragraph::new());
 
-    // Parse markdown content into paragraphs
     for line in content_markdown.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -59,19 +55,18 @@ pub fn generate_docx(title: &str, content_markdown: &str, output_path: &Path) ->
                     .add_run(Run::new().add_text(&format!("• {}", text))),
             );
         } else {
-            // Clean markdown formatting
             let clean = trimmed.replace("**", "").replace('*', "").replace('_', "");
             doc = doc.add_paragraph(Paragraph::new().add_run(Run::new().add_text(&clean)));
         }
     }
 
-    // Build and write to file
     let built = doc.build();
-    
-    // XMLDocx::pack requires Write + Seek, use Cursor
     let mut buf = std::io::Cursor::new(Vec::new());
     built.pack(&mut buf).context("Failed to pack docx")?;
-    
+
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent).context("Failed to create output directory")?;
+    }
     std::fs::write(output_path, buf.into_inner()).context("Failed to write docx file")?;
 
     Ok(())

@@ -62,3 +62,11 @@ pub struct McpServerConfig {
     pub args: Vec<String>,
     pub env: Option<std::collections::HashMap<String, String>>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerHealth {
+    pub name: String,
+    pub online: bool,
+    pub tool_count: usize,
+    pub error: Option<String>,
+}

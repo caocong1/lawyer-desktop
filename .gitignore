@@ -9,11 +9,21 @@ dist
 # Tauri
 src-tauri/target/
 
+# Archive (reference only)
+archive/
+
 # IDE
 .idea/
 *.swp
 *.swo
+.vscode/
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Local tooling
+.claude/
+.playwright-mcp/
+.omo/
+.cursor/

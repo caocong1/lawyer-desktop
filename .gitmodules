@@ -1,0 +1,3 @@
+[submodule "vendor/ai-for-china-legal"]
+	path = vendor/ai-for-china-legal
+	url = https://github.com/caocong1/ai-for-china-legal

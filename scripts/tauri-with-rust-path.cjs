@@ -5,6 +5,7 @@
 const { spawnSync } = require("child_process");
 const path = require("path");
 const os = require("os");
+const { freePort, DEFAULT_PORT } = require("./free-port.cjs");
 
 function preferRustupPath() {
   const cargoBin = path.join(os.homedir(), ".cargo", "bin");
@@ -22,6 +23,10 @@ function preferRustupPath() {
 const root = path.join(__dirname, "..");
 const env = { ...process.env, PATH: preferRustupPath() };
 const args = process.argv.slice(2);
+
+if (args[0] === "dev") {
+  freePort(DEFAULT_PORT);
+}
 
 const result = spawnSync("bunx", ["tauri", ...args], {
   stdio: "inherit",

@@ -1,33 +1,40 @@
 import { createSignal, onMount } from "solid-js";
 
-type Theme = "light" | "dark";
+export type ThemeVariant = "a" | "b" | "c";
 
-const [theme, setThemeSignal] = createSignal<Theme>("light");
+const STORAGE_KEY = "ml-theme";
+
+function readStoredTheme(): ThemeVariant {
+  if (typeof localStorage === "undefined") return "a";
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (saved === "a" || saved === "b" || saved === "c") return saved;
+  return "a";
+}
+
+const [theme, setThemeSignal] = createSignal<ThemeVariant>(readStoredTheme());
+
+function applyTheme(variant: ThemeVariant) {
+  document.documentElement.setAttribute("data-theme", variant);
+}
+
+applyTheme(theme());
 
 export function useTheme() {
   onMount(() => {
-    const saved = localStorage.getItem("theme") as Theme | null;
-    if (saved) {
-      setThemeSignal(saved);
-    } else if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
-      setThemeSignal("dark");
-    }
-    applyTheme();
+    applyTheme(theme());
   });
 
-  function setTheme(t: Theme) {
-    setThemeSignal(t);
-    localStorage.setItem("theme", t);
-    applyTheme();
+  function setTheme(variant: ThemeVariant) {
+    setThemeSignal(variant);
+    localStorage.setItem(STORAGE_KEY, variant);
+    applyTheme(variant);
   }
 
-  function toggleTheme() {
-    setTheme(theme() === "light" ? "dark" : "light");
+  function cycleTheme() {
+    const order: ThemeVariant[] = ["a", "b", "c"];
+    const next = order[(order.indexOf(theme()) + 1) % order.length];
+    setTheme(next);
   }
 
-  function applyTheme() {
-    document.documentElement.setAttribute("data-theme", theme());
-  }
-
-  return { theme, setTheme, toggleTheme };
+  return { theme, setTheme, cycleTheme };
 }

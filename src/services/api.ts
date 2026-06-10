@@ -1,12 +1,23 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { FileAttachment, Conversation, Message } from "../stores/conversation";
+import type { ContextRefPayload } from "../types/contextRefs";
+import type { ClassifyAgentModeResult } from "../types/agentMode";
 import type { ParseLegalDocumentResponse } from "../types/legal";
+
+export type { ContextRefPayload };
+export type { ClassifyAgentModeResult };
+export type { AgentMode } from "../types/agentMode";
 
 export interface SendMessageRequest {
   conversation_id: string;
   content: string;
   attachments?: FileAttachment[];
+  /**
+   * Local paths the agent may read as context for this message.
+   * Each ref must lie under an allowed directory and is resolved server-side.
+   */
+  context_refs?: ContextRefPayload[];
 }
 
 export interface StreamChunk {
@@ -14,6 +25,7 @@ export interface StreamChunk {
   message_id: string;
   chunk: string;
   done: boolean;
+  status?: string | null;
 }
 
 export interface ProviderSetupRequest {
@@ -38,6 +50,33 @@ export interface SkillMetadata {
   plugin_name: string;
   skill_md_path: string;
   full_content: string;
+}
+
+export interface WorkspaceIndexProgress {
+  root_id: string;
+  root_path: string;
+  conversation_id?: string | null;
+  processed: number;
+  total: number;
+  current_file?: string | null;
+  done: boolean;
+  stats?: { file_count: number; chunk_count: number } | null;
+}
+
+export interface BindWorkspaceResult {
+  root_id: string;
+  root_path: string;
+  status: string;
+  file_count: number;
+  chunk_count: number;
+}
+
+export interface WorkspaceIndexStatus {
+  root_id: string;
+  root_path: string;
+  status: string;
+  file_count: number;
+  chunk_count: number;
 }
 
 export interface FileInfo {
@@ -74,6 +113,13 @@ export interface LlmProvider {
 }
 
 // Chat
+export async function classifyAgentMode(req: {
+  content: string;
+  context_refs?: ContextRefPayload[];
+}): Promise<ClassifyAgentModeResult> {
+  return invoke("classify_agent_mode", { req });
+}
+
 export async function sendMessage(req: SendMessageRequest): Promise<string> {
   return invoke("send_message", { req });
 }
@@ -101,6 +147,45 @@ export async function deleteConversation(conversationId: string): Promise<void> 
 
 export async function getActiveProvider(): Promise<LlmProvider | null> {
   return invoke("get_active_provider");
+}
+
+export interface FastProviderResponse {
+  enabled: boolean;
+  name: string;
+  display_name: string;
+  api_base_url: string;
+  model_name: string;
+  has_api_key: boolean;
+}
+
+export async function getFastModelPresets(): Promise<ProviderPreset[]> {
+  return invoke("get_fast_model_presets");
+}
+
+export async function getFastProvider(): Promise<FastProviderResponse | null> {
+  return invoke("get_fast_provider");
+}
+
+export async function setupFastProvider(req: {
+  enabled: boolean;
+  name: string;
+  display_name: string;
+  api_base_url: string;
+  api_key?: string;
+  model_name: string;
+}): Promise<void> {
+  return invoke("setup_fast_provider", { req });
+}
+
+export async function testFastProvider(req: {
+  enabled: boolean;
+  name: string;
+  display_name: string;
+  api_base_url: string;
+  api_key?: string;
+  model_name: string;
+}): Promise<string> {
+  return invoke("test_fast_provider", { req });
 }
 
 export async function setActiveConversation(conversationId: string): Promise<void> {
@@ -161,6 +246,51 @@ export async function listDirectory(path: string, recursive?: boolean): Promise<
 
 export async function prepareAttachment(path: string): Promise<FileAttachment> {
   return invoke("prepare_attachment", { path });
+}
+
+/** Grant one-time read access to a path outside the current allowlist. */
+export async function grantPathAccess(path: string): Promise<void> {
+  return invoke("grant_path_access", { path });
+}
+
+export async function getAllowedFileDirs(): Promise<string[]> {
+  return invoke("get_allowed_file_dirs");
+}
+
+export async function setAllowedFileDirs(dirs: string[]): Promise<void> {
+  return invoke("set_allowed_file_dirs", { dirs });
+}
+
+/** Grant access and start background FTS indexing for a case-materials directory. */
+export async function bindWorkspace(
+  path: string,
+  conversationId?: string,
+): Promise<BindWorkspaceResult> {
+  return invoke("bind_workspace", { path, conversationId });
+}
+
+export async function getWorkspaceIndexStatus(
+  path: string,
+): Promise<WorkspaceIndexStatus | null> {
+  return invoke("get_workspace_index_status", { path });
+}
+
+export async function searchWorkspace(
+  path: string,
+  query: string,
+  k?: number,
+): Promise<
+  Array<{ chunk_id: string; relative_path: string; text: string; score: number }>
+> {
+  return invoke("search_workspace", { path, query, k });
+}
+
+export function onWorkspaceIndexProgress(
+  callback: (event: WorkspaceIndexProgress) => void,
+): Promise<() => void> {
+  return listen<WorkspaceIndexProgress>("workspace-index-progress", (event) => {
+    callback(event.payload);
+  });
 }
 
 // Documents

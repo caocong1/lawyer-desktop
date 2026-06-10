@@ -18,6 +18,101 @@
   color: var(--muted);
 }
 
+.starter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.starter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 10px;
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-radius: 999px;
+  font-size: 12px;
+  max-width: 100%;
+}
+
+.starter-chip-alias {
+  color: var(--accent);
+  font-weight: 500;
+  font-family: var(--mono);
+}
+
+.starter-chip-kind {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.starter-chip-remove {
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  border-radius: 4px;
+}
+
+.starter-chip-remove:hover {
+  color: var(--accent);
+  background: var(--surface);
+}
+
+.starter-bar .tool-btn {
+  border: none;
+  background: none;
+  padding: 6px 10px;
+  border-radius: 8px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.starter-bar .tool-btn:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.attach-wrap {
+  position: relative;
+}
+
+.attach-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 20;
+  min-width: 140px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: var(--shadow-pop);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.attach-menu button {
+  border: none;
+  background: none;
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--ink);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.attach-menu button:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 .recents-empty {
   text-align: center;
   color: var(--muted);

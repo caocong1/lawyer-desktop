@@ -1,10 +1,26 @@
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
+import { open } from "@tauri-apps/plugin-dialog";
 import { SolidMarkdown } from "solid-markdown";
 import remarkGfm from "remark-gfm";
+import type { AgentMode } from "../../types/agentMode";
+import { agentModeLabel } from "../../types/agentMode";
 import { useConversation } from "../../stores/conversation";
-import { onChatStream } from "../../services/api";
+import { containsToolLeakage, sanitizeLlmDocumentContent } from "../../utils/legalDocument";
+import type { ContextRefPayload } from "../../types/contextRefs";
+import { onChatStream, onWorkspaceIndexProgress } from "../../services/api";
 import { Icon } from "../icons/Icons";
+import { DraftingProgressSteps } from "./DraftingProgressSteps";
 import "./ChatPanel.css";
+
+function pathToAlias(path: string, kind: ContextRefPayload["kind"]): string {
+  const normalized = path.replace(/\\/g, "/");
+  const segment = normalized.split("/").filter(Boolean).pop() ?? path;
+  if (kind === "file") {
+    const dot = segment.lastIndexOf(".");
+    return dot > 0 ? segment.slice(0, dot) : segment;
+  }
+  return segment;
+}
 
 function AssistantContent(props: { text: string }) {
   return (
@@ -19,10 +35,21 @@ export interface ChatPanelProps {
   sending: () => boolean;
 }
 
-function sessionTitle(prompt: string, messageCount: number) {
+function sessionTitle(
+  prompt: string,
+  messageCount: number,
+  mode: AgentMode | "idle",
+  modeLabel: string,
+) {
+  if (modeLabel.trim()) {
+    return modeLabel.length > 24 ? `${modeLabel.slice(0, 24)}…` : modeLabel;
+  }
+  if (mode !== "idle") {
+    return agentModeLabel(mode);
+  }
   const p = prompt.trim();
   if (p) return p.length > 24 ? `${p.slice(0, 24)}…` : p;
-  if (messageCount > 0) return "法律文书起草";
+  if (messageCount > 0) return "法律咨询";
   return "新会话";
 }
 
@@ -30,16 +57,30 @@ export function ChatPanel(props: ChatPanelProps) {
   const {
     messages,
     workspacePrompt,
+    workspaceMode,
+    workspaceModeLabel,
     isStreaming,
     streamingContent,
+    streamPhase,
+    draftWorkflowActive,
+    activeEvidenceResponse,
+    legalDocument,
     appendStreamChunk,
     finishStreaming,
+    setStreamStatus,
     activeConversationId,
+    pendingContextRefs,
+    addContextRef,
+    removeContextRef,
+    applyWorkspaceIndexProgress,
+    workspaceIndexForPath,
   } = useConversation();
 
   const [text, setText] = createSignal("");
+  const [attachMenuOpen, setAttachMenuOpen] = createSignal(false);
   let threadRef: HTMLDivElement | undefined;
   let taRef: HTMLTextAreaElement | undefined;
+  let attachRef: HTMLDivElement | undefined;
 
   const visibleMessages = () =>
     messages().filter((m) => m.role === "user" || m.role === "assistant");
@@ -53,16 +94,38 @@ export function ChatPanel(props: ChatPanelProps) {
   });
 
   onMount(async () => {
+    const onDocClick = (e: MouseEvent) => {
+      if (attachMenuOpen() && attachRef && !attachRef.contains(e.target as Node)) {
+        setAttachMenuOpen(false);
+      }
+    };
+    document.addEventListener("click", onDocClick);
+    onCleanup(() => document.removeEventListener("click", onDocClick));
+
+    const unlistenProgress = await onWorkspaceIndexProgress((event) => {
+      if (
+        event.conversation_id &&
+        event.conversation_id !== activeConversationId()
+      ) {
+        return;
+      }
+      applyWorkspaceIndexProgress(event);
+    });
+
     const unlisten = await onChatStream((chunk) => {
       if (chunk.conversation_id !== activeConversationId()) return;
+      if (chunk.status) {
+        setStreamStatus(chunk.status);
+      }
       if (chunk.done) {
-        finishStreaming(chunk.message_id);
+        void finishStreaming(chunk.message_id);
       } else if (chunk.chunk) {
         appendStreamChunk(chunk.chunk);
       }
     });
     onCleanup(() => {
       unlisten();
+      unlistenProgress();
     });
   });
 
@@ -88,7 +151,63 @@ export function ChatPanel(props: ChatPanelProps) {
     setText(ta.value);
   }
 
-  const title = () => sessionTitle(workspacePrompt(), visibleMessages().length);
+  async function pickContextRef(kind: ContextRefPayload["kind"]) {
+    setAttachMenuOpen(false);
+    try {
+      const selected = await open({
+        multiple: false,
+        directory: kind === "directory",
+      });
+      if (!selected || Array.isArray(selected)) return;
+      addContextRef({
+        alias: pathToAlias(selected, kind),
+        path: selected,
+        kind,
+      });
+    } catch (e) {
+      console.error("选择路径失败:", e);
+    }
+  }
+
+  const title = () =>
+    sessionTitle(
+      workspacePrompt(),
+      visibleMessages().length,
+      workspaceMode(),
+      workspaceModeLabel(),
+    );
+
+  const phaseLabel = () => {
+    const phase = streamPhase();
+    if (phase === "indexing") return "正在索引案卷资料…";
+    if (phase === "tool") return "正在检索案卷与法规…";
+    if (phase === "streaming") return "正在生成内容…";
+    if (phase === "thinking") return "正在分析需求并规划结构…";
+    if (phase === "error") return "请求出错";
+    return "正在连接模型…";
+  };
+
+  const showDraftProgress = () =>
+    draftWorkflowActive() && legalDocument() === null && !activeEvidenceResponse();
+
+  const showEvidenceProgress = () =>
+    activeEvidenceResponse() &&
+    isStreaming() &&
+    (!streamingContent() || containsToolLeakage(streamingContent()));
+
+  const evidenceStreamText = () => {
+    const raw = streamingContent();
+    if (!raw || containsToolLeakage(raw)) return "";
+    return sanitizeLlmDocumentContent(raw);
+  };
+
+  const statusLine = () => {
+    if (!isStreaming() && !showDraftProgress()) return `${visibleMessages().length} 条消息`;
+    if (showDraftProgress()) return phaseLabel();
+    if (showEvidenceProgress()) return phaseLabel();
+    if (streamingContent()) return "正在生成回复…";
+    return phaseLabel();
+  };
 
   return (
     <div class="chat" style={{ "--chat-w": "500px" }}>
@@ -98,14 +217,12 @@ export function ChatPanel(props: ChatPanelProps) {
         </div>
         <div>
           <div class="ct">{title()}</div>
-          <div class="cs">
-            {isStreaming() ? "正在生成回复…" : `${visibleMessages().length} 条消息`}
-          </div>
+          <div class="cs">{statusLine()}</div>
         </div>
         <span class="grow" />
-        <div class={`stage-pill${isStreaming() ? " live" : ""}`}>
+        <div class={`stage-pill${isStreaming() || showDraftProgress() || showEvidenceProgress() ? " live" : ""}`}>
           <span class="d" />
-          {isStreaming() ? "回复中" : "已就绪"}
+          {showDraftProgress() || showEvidenceProgress() ? "生成中" : isStreaming() ? "回复中" : "已就绪"}
         </div>
       </div>
 
@@ -140,12 +257,49 @@ export function ChatPanel(props: ChatPanelProps) {
             }
           </For>
         </Show>
-        <Show when={isStreaming() && streamingContent()}>
+        <Show when={showDraftProgress()}>
           <div class="msg msg-agent">
             <div class="ava">墨</div>
             <div class="agent-body">
               <div class="agent-name">墨律 · 法律文书助理</div>
-              <AssistantContent text={streamingContent()} />
+              <DraftingProgressSteps phase={streamPhase} />
+            </div>
+          </div>
+        </Show>
+        <Show when={showEvidenceProgress()}>
+          <div class="msg msg-agent">
+            <div class="ava">墨</div>
+            <div class="agent-body">
+              <div class="agent-name">墨律 · 法律文书助理</div>
+              <div class="streaming-wait">
+                <span class="streaming-wait-dot" />
+                {phaseLabel()}
+              </div>
+            </div>
+          </div>
+        </Show>
+        <Show when={isStreaming() && !showDraftProgress() && !showEvidenceProgress() && !streamingContent()}>
+          <div class="msg msg-agent">
+            <div class="ava">墨</div>
+            <div class="agent-body">
+              <div class="agent-name">墨律 · 法律文书助理</div>
+              <div class="streaming-wait">
+                <span class="streaming-wait-dot" />
+                {phaseLabel()}
+              </div>
+            </div>
+          </div>
+        </Show>
+        <Show when={isStreaming() && !showDraftProgress() && !showEvidenceProgress() && streamingContent()}>
+          <div class="msg msg-agent">
+            <div class="ava">墨</div>
+            <div class="agent-body">
+              <div class="agent-name">墨律 · 法律文书助理</div>
+              <AssistantContent
+                text={
+                  activeEvidenceResponse() ? evidenceStreamText() : streamingContent()
+                }
+              />
             </div>
           </div>
         </Show>
@@ -153,6 +307,44 @@ export function ChatPanel(props: ChatPanelProps) {
 
       <div class="composer">
         <div class="input-box">
+          <Show when={pendingContextRefs().length > 0}>
+            <div class="context-ref-chips">
+              <For each={pendingContextRefs()}>
+                {(ref) => {
+                  const indexState = () =>
+                    ref.kind === "directory" ? workspaceIndexForPath(ref.path) : undefined;
+                  return (
+                  <span class="context-ref-chip" title={ref.path}>
+                    <span class="context-ref-alias">@{ref.alias}</span>
+                    <span class="context-ref-kind">
+                      {ref.kind === "directory" ? "目录" : "文件"}
+                    </span>
+                    <Show when={ref.kind === "directory" && indexState()}>
+                      {(idx) => (
+                        <span class="context-ref-index">
+                          {idx().done
+                            ? `已索引 ${idx().fileCount} 文件`
+                            : idx().total > 0
+                              ? `索引中 ${idx().processed}/${idx().total}`
+                              : "索引中…"}
+                        </span>
+                      )}
+                    </Show>
+                    <button
+                      type="button"
+                      class="context-ref-remove"
+                      aria-label={`移除 ${ref.alias}`}
+                      onClick={() => removeContextRef(ref.path)}
+                      disabled={props.sending()}
+                    >
+                      ×
+                    </button>
+                  </span>
+                  );
+                }}
+              </For>
+            </div>
+          </Show>
           <textarea
             ref={taRef}
             rows={1}
@@ -163,9 +355,30 @@ export function ChatPanel(props: ChatPanelProps) {
             disabled={props.sending()}
           />
           <div class="input-row">
-            <span class="tool">
-              <Icon name="attach" />
-            </span>
+            <div class="attach-wrap" ref={attachRef}>
+              <button
+                type="button"
+                class="tool attach-btn"
+                title="附加文件或目录"
+                disabled={props.sending()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setAttachMenuOpen((v) => !v);
+                }}
+              >
+                <Icon name="attach" />
+              </button>
+              <Show when={attachMenuOpen()}>
+                <div class="attach-menu">
+                  <button type="button" onClick={() => void pickContextRef("file")}>
+                    选择文件
+                  </button>
+                  <button type="button" onClick={() => void pickContextRef("directory")}>
+                    选择文件夹
+                  </button>
+                </div>
+              </Show>
+            </div>
             <span class="tool">
               <Icon name="book" />
             </span>

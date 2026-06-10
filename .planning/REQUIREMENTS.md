@@ -1,115 +1,86 @@
-# Requirements: lawyer-desktop
+# Requirements: 墨律 Inkstatute
 
 **Defined:** 2026-06-10
-**Core Value:** 律师能通过对话获得 AI 法律辅助，并生成可用的法律文书
+**Core Value:** 律师通过对话获得经研究闸门校验的法律文书草稿，可预览、修订并导出 DOCX。
 
 ## v1 Requirements
 
-### 数据基础 (DATA)
+### Foundation (Phase 0)
 
-- [ ] **DATA-01**: 应用能将 conversation 持久化到 SQLite，重启不丢失
-- [ ] **DATA-02**: 应用能将 message 持久化到 SQLite，支持历史消息加载
-- [ ] **DATA-03**: 应用能自动为新会话生成有意义的标题（基于首条消息）
+- [ ] **FOUND-01**: `bun run tauri dev` 启动成功，显示墨律标题栏空壳
+- [ ] **FOUND-02**: `bunx tsc --noEmit` 零错误
+- [ ] **FOUND-03**: `cargo check` 零错误
+- [ ] **FOUND-04**: `vendor/ai-for-china-legal` submodule 可初始化
 
-### 会话管理 (SESSION)
+### UI (Phase 1)
 
-- [ ] **SESSION-01**: 启动时从数据库加载所有历史会话到左侧列表
-- [ ] **SESSION-02**: 用户能删除会话（数据库行删除 + UI 同步）
-- [ ] **SESSION-03**: 切换会话时自动加载该会话的历史消息
-- [ ] **SESSION-04**: 会话标题在用户发送第一条消息后自动更新
+- [ ] **UI-01**: 三套主题 a/b/c 可切换并持久化
+- [ ] **UI-02**: Home 页：打字机 prompt、文书类型、最近项目
+- [ ] **UI-03**: Workspace 三栏：对话 | 文书预览 | 引用抽屉
+- [ ] **UI-04**: Agent 起草计划步骤条可展示
+- [ ] **UI-05**: Home → Workspace 静态演示流程可走通
 
-### Provider 配置 (PROVIDER)
+### Chat & Agent (Phase 2)
 
-- [ ] **PROVIDER-01**: LLM 提供商配置（API key、base URL、model 名称）持久化到 SQLite
-- [ ] **PROVIDER-02**: 应用启动时自动从数据库恢复上次使用过的 provider 配置
-- [ ] **PROVIDER-03**: 用户切换 provider 后，旧配置在数据库中有记录（可回溯）
+- [ ] **CHAT-01**: 配置 OpenAI-compatible 提供商后可流式对话
+- [ ] **CHAT-02**: System prompt 包含 research-gate 前置指令
+- [ ] **CHAT-03**: 意图路由到领域 skill（如 commercial-legal）
+- [ ] **CHAT-04**: 设置面板：provider 配置 + 连接测试
+- [ ] **SKILL-01**: 启动时扫描 vendor 下 SKILL.md 元数据
 
-### 文件与文档 (DOC)
+### Documents (Phase 3)
 
-- [ ] **DOC-01**: 用户能通过 UI 上传 .docx 文件，系统提取文本内容供 AI 分析
-- [ ] **DOC-02**: Workspace 文档预览从实际对话内容生成（非 mock 数据）
-- [ ] **DOC-03**: CitationPanel 显示真实引用来源（来自 LLM 回复，非 hardcoded）
-- [ ] **DOC-04**: 从对话内容一键生成 DOCX 文档（markdown → docx 完整链路）
+- [ ] **DOC-01**: LLM 输出解析为结构化文书模型
+- [ ] **DOC-02**: DocPreview 渲染真实文书（非 mock）
+- [ ] **DOC-03**: CitationPanel 展示法条/判例并可定位条款
+- [ ] **DOC-04**: 导出 DOCX 可在 Word 打开
+- [ ] **DOC-05**: 条款修订后预览同步更新
 
-### 用户界面 (UI)
+### Persistence (Phase 4)
 
-- [ ] **UI-01**: HomePage 显示真实的项目/会话状态信息（非 mock project history）
-- [ ] **UI-02**: HomePage 显示快速操作入口（"新建会话"、"最近会话"、"文档库"）
+- [ ] **DATA-01**: 会话与消息重启后恢复
+- [ ] **DATA-02**: 首条消息自动生成会话标题
+- [ ] **DATA-03**: 可删除会话（UI + DB）
+- [ ] **DATA-04**: Provider 配置持久化并自动恢复
+- [ ] **DATA-05**: 文书版本存入 documents 表
 
-### 安全 (SEC)
+### MCP (Phase 5)
 
-- [ ] **SEC-01**: API key 在 SQLite 中使用对称加密存储（非明文）
-- [ ] **SEC-02**: 文件读取命令限制在用户可配置的目录白名单内（路径沙箱）
-- [ ] **SEC-03**: 启用 Tauri CSP 策略（Content-Security-Policy 非 null）
+- [ ] **MCP-01**: 设置页显示 MCP 服务器在线/离线状态
+- [ ] **MCP-02**: LLM 可调用 law-database 工具
+- [ ] **MCP-03**: MCP 崩溃可检测并提示
 
-### 测试 (TEST)
+### Security (Phase 6)
 
-- [ ] **TEST-01**: 建立 TypeScript 测试框架（Vitest），覆盖 stores 和 api.ts
-- [ ] **TEST-02**: 建立 Rust 测试模块（cargo test），覆盖关键命令和 LLM provider
-- [ ] **TEST-03**: LLM streaming 逻辑有单元测试（至少覆盖 SSE 解析）
-- [ ] **TEST-04**: 数据库迁移有回归测试（确保 migration 可重复运行）
-
-## v2 Requirements
-
-（Deferred to future release）
-
-### Skill 版本管理
-
-- **SKILL-V-01**: SKILL.md frontmatter 支持 `version` 字段（SemVer）
-- **SKILL-V-02**: 数据库记录本地 skill 版本和 content hash
-- **SKILL-V-03**: 支持检查远端 skill 仓库更新（Git-based manifest）
-- **SKILL-V-04**: 支持一键更新 skill 并显示 changelog
-
-### 高级功能
-
-- **ADV-01**: MCP server 真实健康检查（替换 stub）
-- **ADV-02**: 系统 prompt 缓存（避免每轮重建）
-- **ADV-03**: 对话导出（Markdown / PDF / 完整记录）
-- **ADV-04**: 多语言支持（English + 中文）
+- [ ] **SEC-01**: API key 不以明文存 DB
+- [ ] **SEC-02**: 文件读取路径白名单
+- [ ] **SEC-03**: 启用 restrictive CSP
+- [ ] **TEST-01**: `bun run test` 运行 vitest + cargo test
+- [ ] **BUILD-01**: `bun run tauri build` 成功
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| 社区技能市场 | 法律技能需专业审查，暂不开放公共市场 |
-| 多用户/登录系统 | 单机桌面应用，不需要账户体系 |
-| 移动端 App | 桌面专用，移动端另外规划 |
-| 离线 LLM 推理 | 依赖云端 API，离线场景暂不覆盖 |
-| 实时协作 | 单机应用，不支持多用户在线协作 |
+| 多用户登录 | 桌面单机 |
+| 技能市场 | MVP 仅路由 |
+| 移动端 | 另行规划 |
+| 离线 LLM | 云端 API |
+| 全部 14 插件 UI | 智能路由即可 |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DATA-01 | Phase 1 — 数据持久化 | Pending |
-| DATA-02 | Phase 1 — 数据持久化 | Pending |
-| DATA-03 | Phase 1 — 数据持久化 | Pending |
-| SESSION-01 | Phase 1 — 数据持久化 | Pending |
-| SESSION-02 | Phase 1 — 数据持久化 | Pending |
-| SESSION-03 | Phase 1 — 数据持久化 | Pending |
-| SESSION-04 | Phase 1 — 数据持久化 | Pending |
-| PROVIDER-01 | Phase 1 — 数据持久化 | Pending |
-| PROVIDER-02 | Phase 1 — 数据持久化 | Pending |
-| PROVIDER-03 | Phase 1 — 数据持久化 | Pending |
-| TEST-01 | Phase 2 — 测试基建 | Pending |
-| TEST-02 | Phase 2 — 测试基建 | Pending |
-| TEST-03 | Phase 2 — 测试基建 | Pending |
-| TEST-04 | Phase 2 — 测试基建 | Pending |
-| DOC-01 | Phase 3 — 文档与界面真实化 | Pending |
-| DOC-02 | Phase 3 — 文档与界面真实化 | Pending |
-| DOC-03 | Phase 3 — 文档与界面真实化 | Pending |
-| DOC-04 | Phase 3 — 文档与界面真实化 | Pending |
-| UI-01 | Phase 3 — 文档与界面真实化 | Pending |
-| UI-02 | Phase 3 — 文档与界面真实化 | Pending |
-| SEC-01 | Phase 4 — 安全加固 | Pending |
-| SEC-02 | Phase 4 — 安全加固 | Pending |
-| SEC-03 | Phase 4 — 安全加固 | Pending |
+| FOUND-* | Phase 0 | Pending |
+| UI-* | Phase 1 | Pending |
+| CHAT-*, SKILL-* | Phase 2 | Pending |
+| DOC-* | Phase 3 | Pending |
+| DATA-* | Phase 4 | Pending |
+| MCP-* | Phase 5 | Pending |
+| SEC-*, TEST-*, BUILD-* | Phase 6 | Pending |
 
-**Coverage:**
-- v1 requirements: 23 total
-- Mapped to phases: 23
-- Unmapped: 0 ✓
+**Coverage:** v1 requirements: 28 total — all mapped
 
 ---
 *Requirements defined: 2026-06-10*
-*Last updated: 2026-06-10 after initial definition*

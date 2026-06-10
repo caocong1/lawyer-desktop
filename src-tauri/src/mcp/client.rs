@@ -28,6 +28,10 @@ impl McpClient {
         }
     }
 
+    pub fn server_name(&self) -> &str {
+        &self.config.name
+    }
+
     pub async fn start(&self) -> Result<()> {
         let mut cmd = Command::new(&self.config.command);
         cmd.args(&self.config.args);
@@ -51,45 +55,49 @@ impl McpClient {
         *self.stdin.lock().await = Some(stdin);
         *self.reader.lock().await = Some(BufReader::new(stdout));
 
-        // Initialize MCP session
         self.initialize().await?;
-
-        // List available tools
         let tools = self.list_tools().await?;
         *self.tools.lock().await = tools;
 
         Ok(())
     }
 
+    /// Ping health by calling tools/list.
+    pub async fn ping(&self) -> Result<usize> {
+        let tools = self.list_tools().await?;
+        *self.tools.lock().await = tools.clone();
+        Ok(tools.len())
+    }
+
     async fn initialize(&self) -> Result<()> {
         let result = self
-            .send_request("initialize", Some(json!({
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {
-                    "name": "lawyer-desktop",
-                    "version": "0.1.0"
-                }
-            })))
+            .send_request(
+                "initialize",
+                Some(json!({
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {
+                        "name": "lawyer-desktop",
+                        "version": "0.1.0"
+                    }
+                })),
+            )
             .await?;
 
-        // Send initialized notification
         self.send_notification("notifications/initialized", None)
             .await?;
 
-        log::info!("MCP initialized: {:?}", result);
+        log::info!("MCP {} initialized: {:?}", self.config.name, result);
         Ok(())
     }
 
     async fn list_tools(&self) -> Result<Vec<McpTool>> {
-        let result = self
-            .send_request("tools/list", None)
-            .await?;
+        let result = self.send_request("tools/list", None).await?;
 
         if let Some(tools) = result.get("tools") {
-            let tools: Vec<McpTool> = serde_json::from_value(tools.clone())
-                .context("Failed to parse tools list")?;
-            log::info!("MCP tools available: {}", tools.len());
+            let tools: Vec<McpTool> =
+                serde_json::from_value(tools.clone()).context("Failed to parse tools list")?;
+            log::info!("MCP {} tools: {}", self.config.name, tools.len());
             Ok(tools)
         } else {
             Ok(Vec::new())
@@ -98,16 +106,16 @@ impl McpClient {
 
     pub async fn call_tool(&self, name: &str, arguments: serde_json::Value) -> Result<McpToolResult> {
         let result = self
-            .send_request("tools/call", Some(json!({
-                "name": name,
-                "arguments": arguments
-            })))
+            .send_request(
+                "tools/call",
+                Some(json!({
+                    "name": name,
+                    "arguments": arguments
+                })),
+            )
             .await?;
 
-        let tool_result: McpToolResult = serde_json::from_value(result)
-            .context("Failed to parse tool result")?;
-
-        Ok(tool_result)
+        serde_json::from_value(result).context("Failed to parse tool result")
     }
 
     pub async fn get_tools(&self) -> Vec<McpTool> {
@@ -132,9 +140,8 @@ impl McpClient {
         };
 
         let request_json = serde_json::to_string(&request)?;
-        log::debug!("MCP request: {}", request_json);
+        log::debug!("MCP {} request: {}", self.config.name, request_json);
 
-        // Write to stdin
         {
             let mut stdin_guard = self.stdin.lock().await;
             if let Some(ref mut stdin) = *stdin_guard {
@@ -146,7 +153,6 @@ impl McpClient {
             }
         }
 
-        // Read response from stdout
         {
             let mut reader_guard = self.reader.lock().await;
             if let Some(ref mut reader) = *reader_guard {
@@ -210,22 +216,5 @@ impl McpClient {
         *self.stdin.lock().await = None;
         *self.reader.lock().await = None;
         Ok(())
-    }
-}
-
-impl Drop for McpClient {
-    fn drop(&mut self) {
-        let process = self.process.clone();
-        let stdin = self.stdin.clone();
-        let reader = self.reader.clone();
-        tokio::spawn(async move {
-            let mut p = process.lock().await;
-            if let Some(ref mut child) = *p {
-                child.kill().await.ok();
-            }
-            *p = None;
-            *stdin.lock().await = None;
-            *reader.lock().await = None;
-        });
     }
 }

@@ -1,17 +1,19 @@
-/* Loading overlay */
+/* App shell — see molv-base.css */
+
 .loading-overlay {
   position: fixed;
   inset: 0;
-  background: var(--app-bg);
+  z-index: 100;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 16px;
-  z-index: 9999;
-  font-size: 15px;
-  color: var(--ink-soft);
+  gap: 12px;
+  background: color-mix(in srgb, var(--app-bg) 92%, transparent);
+  color: var(--muted);
+  font-size: 14px;
 }
+
 .loading-spinner {
   width: 28px;
   height: 28px;
@@ -20,33 +22,7 @@
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
 
-/* Toast */
-.toast {
-  position: fixed;
-  bottom: 24px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: var(--ink);
-  color: var(--app-bg);
-  padding: 10px 20px;
-  border-radius: 8px;
-  font-size: 13px;
-  box-shadow: var(--shadow-pop);
-  z-index: 9999;
-  animation: toast-in 0.2s ease-out;
-}
-
-@keyframes toast-in {
-  from { opacity: 0; transform: translate(-50%, 8px); }
-  to { opacity: 1; transform: translate(-50%, 0); }
-}
-
-/* Material Symbols */
-.material-symbols-outlined {
-  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
-}
-.material-symbols-outlined.filled {
-  font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }

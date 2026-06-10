@@ -10,15 +10,20 @@ export default defineConfig({
   plugins: [solid()],
   resolve: {
     alias: {
-      // remark/micromark pull in CJS `debug`; Vite ESM import fails without shim
+      // remark/unified chain uses CJS packages; Vite ESM default import fails without shims
       debug: path.resolve(rootDir, "src/shims/debug.ts"),
+      extend: path.resolve(rootDir, "src/shims/extend.ts"),
     },
+  },
+  optimizeDeps: {
+    include: ["remark-gfm", "solid-markdown", "unified", "remark-parse", "remark-rehype"],
   },
   clearScreen: false,
   server: {
     port: 1420,
     strictPort: true,
-    host: host || false,
+    // Tauri WebView on Windows resolves localhost to 127.0.0.1; ::1-only breaks loading
+    host: host || "127.0.0.1",
     hmr: host
       ? { protocol: "ws", host, port: 1421 }
       : undefined,

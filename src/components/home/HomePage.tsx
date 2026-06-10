@@ -1,12 +1,16 @@
-import { For, onMount, createSignal } from "solid-js";
+import { For, onMount, onCleanup, createSignal, Show } from "solid-js";
+import { open } from "@tauri-apps/plugin-dialog";
 import { Icon } from "../icons/Icons";
 import "./HomePage.css";
 import { useConversation } from "../../stores/conversation";
+import type { ContextRefPayload } from "../../types/contextRefs";
+import { pathToRefAlias } from "../../utils/evidenceFlow";
 
 export interface HomePageProps {
   onStart: (prompt: string) => void;
   onPickType: (prompt: string) => void;
   onOpenRecent: (id: string) => void;
+  onToast?: (msg: string) => void;
 }
 
 const DOC_TYPES = [
@@ -50,13 +54,69 @@ function formatRelativeTime(iso: string): string {
   return new Date(iso).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
 }
 
+function toRef(path: string, kind: ContextRefPayload["kind"]): ContextRefPayload {
+  return {
+    alias: pathToRefAlias(path),
+    path,
+    kind,
+  };
+}
+
 export function HomePage(props: HomePageProps) {
-  const { conversations, loadConversations } = useConversation();
+  const {
+    conversations,
+    loadConversations,
+    pendingContextRefs,
+    addContextRef,
+    removeContextRef,
+  } = useConversation();
   const [input, setInput] = createSignal("");
+  const [attachOpen, setAttachOpen] = createSignal(false);
+  let attachRef: HTMLDivElement | undefined;
 
   onMount(() => {
     loadConversations();
+    const onDocClick = (e: MouseEvent) => {
+      if (attachOpen() && attachRef && !attachRef.contains(e.target as Node)) {
+        setAttachOpen(false);
+      }
+    };
+    document.addEventListener("click", onDocClick);
+    onCleanup(() => document.removeEventListener("click", onDocClick));
   });
+
+  async function pickDirectory() {
+    setAttachOpen(false);
+    try {
+      const selected = await open({ multiple: false, directory: true });
+      if (!selected || Array.isArray(selected)) return;
+      addContextRef(toRef(selected, "directory"));
+    } catch (e) {
+      console.error("选择文件夹失败:", e);
+      props.onToast?.("选择文件夹失败");
+    }
+  }
+
+  async function pickFiles(multiple: boolean) {
+    setAttachOpen(false);
+    try {
+      const selected = await open({ multiple, directory: false });
+      if (!selected) return;
+      const paths = Array.isArray(selected) ? selected : [selected];
+      for (const path of paths) {
+        addContextRef(toRef(path, "file"));
+      }
+    } catch (e) {
+      console.error("选择文件失败:", e);
+      props.onToast?.("选择文件失败");
+    }
+  }
+
+  function handleLawSearch() {
+    props.onToast?.("进入对话后，AI 将通过 MCP 法条库检索；请先在设置中确认 MCP 已连接。");
+  }
+
+  const canSend = () => input().trim().length > 0 || pendingContextRefs().length > 0;
 
   return (
     <div class="home scroll">
@@ -72,38 +132,82 @@ export function HomePage(props: HomePageProps) {
         <div class="starter">
           <div class="starter-top">
             <div class="seal">墨</div>
-            <div class="t">新建文书</div>
+            <div class="t">新建任务</div>
             <div class="pill">
               <Icon name="sparkle" style={{ width: "13px", height: "13px" }} />
-              AI 起草
+              AI 助理
             </div>
           </div>
+          <Show when={pendingContextRefs().length > 0}>
+            <div class="starter-chips">
+              <For each={pendingContextRefs()}>
+                {(ref) => (
+                  <span class="starter-chip" title={ref.path}>
+                    <span class="starter-chip-alias">@{ref.alias}</span>
+                    <span class="starter-chip-kind">
+                      {ref.kind === "directory" ? "文件夹" : "文件"}
+                    </span>
+                    <button
+                      type="button"
+                      class="starter-chip-remove"
+                      aria-label={`移除 ${ref.alias}`}
+                      onClick={() => removeContextRef(ref.path)}
+                    >
+                      ×
+                    </button>
+                  </span>
+                )}
+              </For>
+            </div>
+          </Show>
           <div class="starter-field">
             <textarea
               class="starter-input"
-              placeholder="描述你的法律需求，例如：起草一份股权转让协议..."
+              placeholder="描述你的法律需求，例如：起草一份股权转让协议，或附加本地资料后生成诉讼方案…"
               value={input()}
               onInput={(e) => setInput(e.currentTarget.value)}
               rows={3}
             />
           </div>
           <div class="starter-bar">
-            <div class="tool">
-              <Icon name="attach" />
-              附卷宗
+            <div class="attach-wrap" ref={attachRef}>
+              <button
+                type="button"
+                class="tool tool-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setAttachOpen((v) => !v);
+                }}
+              >
+                <Icon name="attach" />
+                附加资料
+              </button>
+              <Show when={attachOpen()}>
+                <div class="attach-menu">
+                  <button type="button" onClick={() => void pickDirectory()}>
+                    选择文件夹
+                  </button>
+                  <button type="button" onClick={() => void pickFiles(false)}>
+                    选择文件
+                  </button>
+                  <button type="button" onClick={() => void pickFiles(true)}>
+                    选择多个文件
+                  </button>
+                </div>
+              </Show>
             </div>
-            <div class="tool">
+            <button type="button" class="tool tool-btn" onClick={handleLawSearch}>
               <Icon name="book" />
-              引用法库
-            </div>
+              法条检索
+            </button>
             <span class="grow" />
             <button
               type="button"
               class="btn-accent"
               onClick={() => props.onStart(input().trim())}
-              disabled={!input().trim()}
+              disabled={!canSend()}
             >
-              起草
+              开始
               <Icon name="send" />
             </button>
           </div>
@@ -136,7 +240,7 @@ export function HomePage(props: HomePageProps) {
         </div>
         <div class="recents">
           {conversations().length === 0 ? (
-            <div class="recents-empty">暂无最近项目，开始起草一份新文书吧</div>
+            <div class="recents-empty">暂无最近项目，开始一份新任务吧</div>
           ) : (
             <For each={conversations()}>
               {(c) => (
@@ -145,7 +249,7 @@ export function HomePage(props: HomePageProps) {
                     <Icon name="doc" />
                   </div>
                   <div>
-                    <div class="rt">{c.title || "未命名文书"}</div>
+                    <div class="rt">{c.title || "未命名任务"}</div>
                     <div class="rs">{formatRelativeTime(c.updated_at)}</div>
                   </div>
                   <div class="rmeta">

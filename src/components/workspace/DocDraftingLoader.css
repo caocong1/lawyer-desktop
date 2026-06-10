@@ -1,0 +1,34 @@
+.doc-drafting {
+  padding: 38px 24px 70px;
+}
+
+.doc-drafting-sheet {
+  opacity: 0.96;
+}
+
+.doc-drafting-head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.doc-drafting-head .sk-title {
+  width: 42%;
+  height: 22px;
+  border-radius: 6px;
+}
+
+.doc-drafting-head .sk-subtitle {
+  width: 28%;
+  height: 11px;
+}
+
+.doc-drafting-body {
+  margin-bottom: 28px;
+}
+
+.doc-drafting-plan {
+  margin-top: 8px;
+}

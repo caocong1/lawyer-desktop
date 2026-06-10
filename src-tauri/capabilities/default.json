@@ -5,13 +5,18 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:window:default",
+    "core:window:allow-minimize",
+    "core:window:allow-maximize",
+    "core:window:allow-unmaximize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging",
+    "core:window:allow-is-maximized",
     "opener:default",
+    "sql:default",
     "dialog:default",
     "fs:default",
-    "shell:default",
-    {
-      "identifier": "sql:default",
-      "allow": []
-    }
+    "mcp-bridge:default"
   ]
 }

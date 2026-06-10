@@ -1,72 +1,85 @@
-# Roadmap: lawyer-desktop
+# Roadmap: 墨律 Inkstatute
 
 ## Overview
 
-Transform a brownfield SolidJS + Tauri lawyer-assistant skeleton into a working application by wiring real SQLite persistence, establishing test infrastructure, replacing mock data with live content, and hardening security. Four coarse phases delivered sequentially.
+绿场重建 lawyer-desktop：Bun + Tauri 2.11 + SolidJS，集成 ai-for-china-legal submodule，6 阶段顺序交付。
 
 ## Phases
 
-- [ ] **Phase 1: 数据持久化** — Conversations, messages, and provider configurations survive app restarts via SQLite
-- [ ] **Phase 2: 测试基建** — Vitest + cargo test frameworks cover critical paths (LLM streaming, skill routing, DB migrations)
-- [ ] **Phase 3: 文档与界面真实化** — Real DOCX processing, Workspace/HomePage display live data instead of mocks
-- [ ] **Phase 4: 安全加固** — API keys encrypted at rest, file access sandboxed, CSP enabled
+- [ ] **Phase 0: 地基与验证** — 干净仓库、可启动空壳、GSD 工件、submodule
+- [ ] **Phase 1: UI 壳层** — 墨律视觉与交互（静态 seed 数据）
+- [ ] **Phase 2: Agent 对话核心** — LLM 流式 + Skills + research-gate
+- [ ] **Phase 3: 文书工作区真实化** — 结构化文书、预览、引用、DOCX
+- [ ] **Phase 4: 数据持久化** — SQLite 会话/消息/配置/文书
+- [ ] **Phase 5: MCP 连接器** — law-database + 健康检查
+- [ ] **Phase 6: 安全与发布** — 加密、沙箱、CSP、测试、构建
 
 ## Phase Details
 
-### Phase 1: 数据持久化
-**Goal**: Conversations, messages, and provider configurations survive app restarts. Users never lose their work or settings.
-**Depends on**: Nothing (foundation phase)
-**Requirements**: DATA-01, DATA-02, DATA-03, SESSION-01, SESSION-02, SESSION-03, SESSION-04, PROVIDER-01, PROVIDER-02, PROVIDER-03
-**Success Criteria** (what must be TRUE):
-  1. User can send messages in a conversation, close and reopen the app — all messages and the conversation are restored exactly as they were
-  2. User's LLM provider configuration (API key, base URL, model name) persists across app restarts — the app resumes with the last active provider
-  3. On startup, the sidebar lists all historical conversations loaded from SQLite, not from any in-memory default
-  4. User can delete a conversation from the sidebar — it disappears from both the UI and the database
-  5. A new conversation automatically gets a meaningful title generated from its first message, visible in the conversation list
-**Plans**: TBD
+### Phase 0: 地基与验证
+**Goal**: 干净仓库 + 可启动空壳 + GSD + submodule
+**Success Criteria**:
+1. `bun run tauri dev` 显示墨律标题栏
+2. `bunx tsc --noEmit` 零错误
+3. `cargo check` 零错误
+4. ROADMAP 含 6 阶段
+5. submodule 可 init
+
+### Phase 1: UI 壳层
+**Goal**: 100% 还原 Claude 原型视觉，静态 seed 数据
+**Success Criteria**:
+1. Home → Workspace 演示流程可走通
+2. 主题 a/b/c 切换持久化
+3. 无控制台 error
 **UI hint**: yes
 
-### Phase 2: 测试基建
-**Goal**: TypeScript and Rust test frameworks are established with coverage of critical execution paths, enabling safe refactoring in later phases.
-**Depends on**: Phase 1 (DB migration must exist and be finalized before regression tests)
-**Requirements**: TEST-01, TEST-02, TEST-03, TEST-04
-**Success Criteria** (what must be TRUE):
-  1. `bunx vitest run` passes with TypeScript tests covering stores (conversation, settings, theme) and api.ts invoke wrappers
-  2. `cargo test` passes with Rust tests covering LLM streaming (SSE chunk parsing), skill routing, and DB model serialization
-  3. A single `bun run test` command (or equivalent) runs both TypeScript and Rust test suites and reports results
-  4. Database migration tests verify that `001_init.sql` runs cleanly on a fresh database and is idempotent
-**Plans**: TBD
+### Phase 2: Agent 对话核心
+**Goal**: 真实 LLM 取代 mock，Skills 从 submodule 加载
+**Success Criteria**:
+1. 流式对话可用
+2. 股权转让意图路由 commercial-legal
+3. research-gate 在 system prompt
+4. 设置面板 provider + 测试
 
-### Phase 3: 文档与界面真实化
-**Goal**: Document processing works end-to-end and all UI surfaces display real data from the database instead of hardcoded mocks.
-**Depends on**: Phase 1 (real data must be stored before UI can display it)
-**Requirements**: DOC-01, DOC-02, DOC-03, DOC-04, UI-01, UI-02
-**Success Criteria** (what must be TRUE):
-  1. User can upload a .docx file and see its extracted text content displayed in the chat as context for the AI
-  2. Workspace document preview shows content generated from real conversation data (not hardcoded mock documents)
-  3. CitationPanel displays actual citations extracted from LLM responses during the active conversation
-  4. User can click "生成文书" from a conversation and receive a real DOCX file containing that conversation's content
-  5. HomePage displays the user's real conversation history and quick-action buttons ("新建会话", "最近会话", "文档库")
-**Plans**: TBD
+### Phase 3: 文书工作区真实化
+**Goal**: 预览/引用/修订来自 LLM 输出
+**Success Criteria**:
+1. 起草 → 风险 → 补条款 → 预览更新
+2. DOCX 导出可用
+3. 引用可定位条款
 **UI hint**: yes
 
-### Phase 4: 安全加固
-**Goal**: Sensitive data is protected at rest, file system access is constrained, and the app window enforces a content security policy.
-**Depends on**: Phase 1 (API keys must be persisted in SQLite before they can be encrypted)
-**Requirements**: SEC-01, SEC-02, SEC-03
-**Success Criteria** (what must be TRUE):
-  1. API keys stored in SQLite are encrypted with a symmetric cipher (not stored as plaintext)
-  2. File read/upload commands respect a configurable directory whitelist — paths outside the whitelist are rejected
-  3. Tauri `security.csp` configuration is set to a restrictive value (not null/open), preventing XSS through the webview
-**Plans**: TBD
+### Phase 4: 数据持久化
+**Goal**: 重启不丢数据
+**Success Criteria**:
+1. 会话消息恢复
+2. 自动标题
+3. 删除会话
+4. Provider 持久化
+
+### Phase 5: MCP 连接器
+**Goal**: law-database 接入
+**Success Criteria**:
+1. MCP 状态显示
+2. LLM 可调用 law-database
+3. 崩溃可检测
+
+### Phase 6: 安全与发布
+**Goal**: 内测安全基线
+**Success Criteria**:
+1. API key 加密
+2. 路径白名单
+3. 测试绿灯
+4. 生产构建成功
 
 ## Progress
 
-**Execution Order:** 1 → 2 → 3 → 4
-
-| Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
-| 1. 数据持久化 | 0/TBD | Not started | - |
-| 2. 测试基建 | 0/TBD | Not started | - |
-| 3. 文档与界面真实化 | 0/TBD | Not started | - |
-| 4. 安全加固 | 0/TBD | Not started | - |
+| Phase | Status | Completed |
+|-------|--------|-----------|
+| 0. 地基与验证 | In progress | - |
+| 1. UI 壳层 | Not started | - |
+| 2. Agent 对话 | Not started | - |
+| 3. 文书工作区 | Not started | - |
+| 4. 数据持久化 | Not started | - |
+| 5. MCP | Not started | - |
+| 6. 安全发布 | Not started | - |

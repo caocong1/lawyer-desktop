@@ -20,6 +20,19 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
 
+-- 文书表
+CREATE TABLE IF NOT EXISTS documents (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  document_json TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_documents_conversation ON documents(conversation_id);
+
 -- LLM Provider 配置表
 CREATE TABLE IF NOT EXISTS llm_providers (
   id TEXT PRIMARY KEY,
@@ -31,37 +44,6 @@ CREATE TABLE IF NOT EXISTS llm_providers (
   is_active INTEGER DEFAULT 0,
   config_json TEXT,
   created_at TEXT NOT NULL
-);
-
--- Skills 注册表
-CREATE TABLE IF NOT EXISTS registered_skills (
-  id TEXT PRIMARY KEY,
-  plugin_name TEXT NOT NULL,
-  skill_name TEXT NOT NULL,
-  description TEXT NOT NULL,
-  skill_md_path TEXT NOT NULL,
-  argument_hint TEXT,
-  is_enabled INTEGER DEFAULT 1,
-  updated_at TEXT NOT NULL
-);
-
--- 用户反馈表
-CREATE TABLE IF NOT EXISTS feedback (
-  id TEXT PRIMARY KEY,
-  message_id TEXT REFERENCES messages(id),
-  conversation_id TEXT NOT NULL,
-  rating INTEGER NOT NULL,
-  comment TEXT,
-  context_json TEXT,
-  created_at TEXT NOT NULL
-);
-
--- 用户实践配置
-CREATE TABLE IF NOT EXISTS practice_profiles (
-  id TEXT PRIMARY KEY,
-  plugin_name TEXT NOT NULL UNIQUE,
-  profile_content TEXT NOT NULL,
-  updated_at TEXT NOT NULL
 );
 
 -- 应用设置（key-value）

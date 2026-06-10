@@ -6,6 +6,7 @@ import { useConversation } from "../../stores/conversation";
 import { generateDocx } from "../../services/api";
 import { renderSegs } from "../../utils/renderSegs";
 import { Icon } from "../icons/Icons";
+import { DocDraftingLoader } from "./DocDraftingLoader";
 import "./DocPreview.css";
 
 export interface DocPreviewProps {
@@ -29,9 +30,11 @@ export function DocPreview(props: DocPreviewProps) {
     documentMarkdown,
     documentVersion,
     activeConversationId,
+    isStreaming,
   } = useConversation();
 
   const hasDocument = () => legalDocument() !== null && articles().length > 0;
+  const isDrafting = () => isStreaming() && !hasDocument();
   const meta = () => docMeta();
 
   function exec(cmd: string, val: string | null = null) {
@@ -123,11 +126,18 @@ export function DocPreview(props: DocPreviewProps) {
         <Show
           when={hasDocument()}
           fallback={
-            <div class="doc-empty">
-              <Icon name="doc" />
-              <p>文书预览将在 AI 生成结构化内容后显示</p>
-              <p class="sub">请描述起草需求，或等待当前回复完成</p>
-            </div>
+            <Show
+              when={isDrafting()}
+              fallback={
+                <div class="doc-empty">
+                  <Icon name="doc" />
+                  <p>文书预览将在 AI 生成结构化内容后显示</p>
+                  <p class="sub">请描述起草需求，或等待当前回复完成</p>
+                </div>
+              }
+            >
+              <DocDraftingLoader />
+            </Show>
           }
         >
           <Show when={docMode() === "edit"}>

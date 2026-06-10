@@ -1,10 +1,11 @@
 {
   "mcpServers": {
-    "stitch": {
-      "command": "npx",
-      "args": ["@_davideast/stitch-mcp", "proxy"],
+    "law-database": {
+      "command": "node",
+      "args": ["vendor/ai-for-china-legal/connectors/law-database/index.js"],
       "env": {
-        "STITCH_API_KEY": "${STITCH_API_KEY}"
+        "LAW_DB_API_URL": "${LAW_DB_API_URL}",
+        "LAW_DB_API_KEY": "${LAW_DB_API_KEY}"
       }
     }
   }

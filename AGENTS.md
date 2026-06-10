@@ -14,8 +14,11 @@
 # Development (Vite + Rust; prefers rustup MSVC over Chocolatey GNU rust)
 bun run tauri dev
 
-# Frontend only
+# Frontend only (auto-frees port 1420 if a stale Vite is listening)
 bun run dev
+
+# Manually stop whatever is listening on 1420
+bun run dev:stop
 
 # Production build
 bun run tauri build

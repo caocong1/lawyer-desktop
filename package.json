@@ -5,14 +5,18 @@
   "description": "墨律 Inkstatute — 法律文书 AI 桌面助手",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/free-port.cjs 1420 && vite",
+    "dev:stop": "node scripts/free-port.cjs 1420",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "tauri": "node scripts/tauri-with-rust-path.cjs",
     "tauri:dev": "node scripts/tauri-with-rust-path.cjs dev",
     "test": "vitest run",
     "test:rust": "node scripts/cargo-with-rust-path.cjs test --manifest-path src-tauri/Cargo.toml",
-    "test:mcp": "node scripts/test-tauri-mcp.cjs"
+    "test:mcp": "node scripts/test-tauri-mcp.cjs",
+    "test:llm-tools": "node scripts/cargo-with-rust-path.cjs run --example probe_llm_tools --manifest-path src-tauri/Cargo.toml",
+    "stitch:create": "node scripts/stitch-create-molv.cjs",
+    "stitch:list": "node scripts/stitch-api.cjs list"
   },
   "dependencies": {
     "solid-js": "^1.9.13",
@@ -26,6 +30,7 @@
     "highlight.js": "^11.11.1"
   },
   "devDependencies": {
+    "@hypothesi/tauri-mcp-server": "^0.11.2",
     "@solidjs/testing-library": "^0.8.10",
     "@tauri-apps/cli": "^2.11.2",
     "@types/node": "^24.13.1",

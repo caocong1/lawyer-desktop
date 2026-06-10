@@ -1,13 +1,6 @@
 import { createSignal } from "solid-js";
 import { getActiveProvider } from "../services/api";
 
-export interface ProviderPreset {
-  name: string;
-  display_name: string;
-  api_base_url: string;
-  default_model: string;
-}
-
 export interface ProviderConfig {
   name: string;
   display_name: string;

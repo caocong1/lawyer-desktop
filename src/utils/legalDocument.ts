@@ -181,3 +181,136 @@ export function modelToDocMeta(model: LegalDocumentModel): DocMeta {
     recital: modelToRecital(model),
   };
 }
+
+const CHAT_SUMMARY_MARKER = "正文见右侧文书预览";
+
+const TOOL_LEAK_RE =
+  /<\/?tool_calls?>|<\/?invoke|invoke\s+name\s*=|parameter\s+name\s*=|toolalls|function_call|<\|[^|]+\|>|\|\s*\|\s*DSML|DSML/i;
+
+const INSTRUCTION_TITLE_RE = /^(写一份|起草|生成|帮我|请)/;
+
+/** Model sometimes leaks tool-call markup into plain text — never show as document body. */
+export function containsToolLeakage(text: string): boolean {
+  return TOOL_LEAK_RE.test(text);
+}
+
+export function isInstructionLikeTitle(title: string): boolean {
+  const t = title.trim();
+  return !t || INSTRUCTION_TITLE_RE.test(t);
+}
+
+/** Strip tool XML, planning steps, and other non-document noise from LLM output. */
+export function sanitizeLlmDocumentContent(text: string): string {
+  let s = text.trim();
+  if (!s) return "";
+
+  s = s.replace(/<\|[^|>]*\|>/g, "");
+  s = s.replace(/\|\s*\|\s*DSML\s*\|\s*\|/gi, "");
+  s = s.replace(/<tool_calls?>[\s\S]*?<\/tool_calls?>/gi, "");
+  s = s.replace(/<invoke[\s\S]*?<\/invoke>/gi, "");
+  s = s.replace(/<invoke[\s\S]*?(?=<invoke|$)/gi, "");
+  s = s.replace(/```[\s\S]*?```/g, (block) =>
+    TOOL_LEAK_RE.test(block) ? "" : block,
+  );
+  s = s.replace(/^#{1,3}\s*第[一二三四五六七八九十\d]+步[^\n]*\n?/gm, "");
+  s = s.replace(/^.*(?:DSML|toolalls|parameter\s+name\s*=|invoke\s+name\s*=|<\|)[^\n]*\n?/gim, "");
+  s = s.replace(/<\/?[a-zA-Z_:][^>\n]*>/g, "");
+  s = s.replace(/\|\|+/g, "|");
+
+  return s.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+export function looksLikeLegalProse(text: string): boolean {
+  const markers = text.match(/甲方|乙方|合同|协议|租赁|承租|出租|条款|鉴于|双方|违约责任/g);
+  if ((markers?.length ?? 0) >= 2) return true;
+  const clauses = text.match(/第[一二三四五六七八九十百零\d]+条/g);
+  return (clauses?.length ?? 0) >= 2;
+}
+
+export function isPublishableDocument(text: string): boolean {
+  const cleaned = sanitizeLlmDocumentContent(text);
+  if (cleaned.length < 120) return false;
+  if (containsToolLeakage(cleaned)) return false;
+  if (extractLegalDocumentJson(cleaned)) return true;
+  return looksLikeLegalProse(cleaned);
+}
+
+function inferDocumentTitle(md: string, fallbackTitle?: string): string {
+  const h1 = md.match(/^#\s+(.+)$/m);
+  if (h1) return h1[1].trim();
+
+  const book = md.match(/[《]([^》]+)[》]/);
+  if (book) return book[1].trim();
+
+  const contract = md.match(/(.{2,24}(?:合同|协议))/);
+  if (contract) return contract[1].trim();
+
+  const fb = fallbackTitle?.trim();
+  if (fb && !isInstructionLikeTitle(fb)) return fb;
+
+  return "法律文书";
+}
+
+/** Build a preview model from plain-markdown LLM output when JSON is absent. */
+export function markdownToLegalDocument(
+  text: string,
+  fallbackTitle?: string,
+): LegalDocumentModel | null {
+  const md = sanitizeLlmDocumentContent(text);
+  if (md.length < 120 || md.includes(CHAT_SUMMARY_MARKER)) return null;
+  if (containsToolLeakage(md) || !looksLikeLegalProse(md)) return null;
+
+  const title = inferDocumentTitle(md, fallbackTitle);
+
+  const parties: LegalDocumentModel["parties"] = [];
+  for (const line of md.split("\n")) {
+    const m = line.match(/^\*?\*?(甲方|乙方)[^*：:\n]*\*?\*?[：:]\s*(.+)/);
+    if (m) {
+      parties.push({
+        role: m[1],
+        name: m[2].replace(/\*+/g, "").trim(),
+      });
+    }
+  }
+
+  let body = md;
+  const h1 = md.match(/^#\s+(.+)$/m);
+  if (h1) body = md.replace(/^#\s+.+\n*/m, "").trim();
+
+  const clauseParts = body.split(
+    /(?=^#{1,3}\s+第|^第[一二三四五六七八九十百零\d]+条)/m,
+  );
+
+  const sections: LegalDocumentModel["sections"] = [];
+
+  if (clauseParts.length > 1) {
+    const preamble = clauseParts[0].trim();
+    if (preamble) {
+      sections.push({ id: "recital", heading: "鉴于", content: preamble });
+    }
+    for (const part of clauseParts.slice(1)) {
+      const lines = part.trim().split("\n");
+      const heading = lines[0]?.replace(/^#+\s*/, "").trim() || "条款";
+      const content = lines.slice(1).join("\n").trim() || part.trim();
+      sections.push({
+        id: `clause-${sections.length}`,
+        heading,
+        content,
+        clauses: [{ id: `c-${sections.length}`, title: heading, text: content }],
+      });
+    }
+  } else {
+    sections.push({
+      id: "body",
+      heading: "正文",
+      content: body,
+      clauses: [{ id: "c-1", title: "正文", text: body }],
+    });
+  }
+
+  return {
+    title,
+    parties: parties.length > 0 ? parties : undefined,
+    sections,
+  };
+}
