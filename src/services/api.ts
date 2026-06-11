@@ -15,6 +15,7 @@ export interface SendMessageRequest {
   conversation_id: string;
   content: string;
   attachments?: FileAttachment[];
+  ui_hidden?: boolean;
   /**
    * Local paths the agent may read as context for this message.
    * Each ref must lie under an allowed directory and is resolved server-side.

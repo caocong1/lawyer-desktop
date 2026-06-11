@@ -139,11 +139,6 @@ function hydrateWorkflowSnapshots(msgs: Message[]) {
   setWorkflowByMessageId((prev) => ({ ...prev, ...snapshots }));
 }
 
-function clipText(text: string, max = 48): string {
-  const trimmed = text.trim();
-  return trimmed.length > max ? `${trimmed.slice(0, max)}…` : trimmed;
-}
-
 function emptyWorkflow(e: AgentTraceEvent): WorkflowState {
   return {
     message_id: e.message_id,
@@ -167,12 +162,13 @@ function upsertStep(
   state: WorkflowStepState,
   seq?: number,
   detail?: string,
+  tsMs?: number,
 ): WorkflowState {
   const idx = workflow.steps.findIndex((step) => step.id === id);
-  const base: WorkflowStep = { id, kind, label, state, seq, detail };
+  const base: WorkflowStep = { id, kind, label, state, seq, detail, ts_ms: tsMs };
   if (idx >= 0) {
     const next = workflow.steps.slice();
-    next[idx] = { ...next[idx], ...base };
+    next[idx] = { ...next[idx], ...base, ts_ms: tsMs ?? next[idx].ts_ms };
     return { ...workflow, steps: next };
   }
 
@@ -193,32 +189,15 @@ function markStep(
   };
 }
 
-function traceToolLabel(name: string, argsPreview: string): { label: string; detail?: string } {
-  if (name === "search_workspace") {
-    const query = extractJsonString(argsPreview, "query");
-    return {
-      label: "检索案卷资料",
-      detail: query ? `search_workspace: ${clipText(query, 36)}` : "search_workspace",
-    };
-  }
-  if (name === "read_chunk") return { label: "读取案卷片段", detail: "read_chunk" };
-  if (name === "read_file") return { label: "读取案卷文件", detail: "read_file" };
-  if (name === "list_files") return { label: "梳理案卷文件", detail: "list_files" };
-  if (name === "get_index_status") return { label: "确认案卷索引", detail: "get_index_status" };
-  if (name === "read_user_file") return { label: "读取本地文件", detail: "read_user_file" };
-  if (name === "generate_docx") return { label: "生成 DOCX 文件", detail: "generate_docx" };
-  if (name === "ask_user") return { label: "确认缺失信息", detail: "ask_user" };
-  return { label: `调用工具「${name}」`, detail: name };
-}
-
-function extractJsonString(jsonLike: string, key: string): string | undefined {
-  try {
-    const parsed = JSON.parse(jsonLike) as Record<string, unknown>;
-    const value = parsed[key];
-    return typeof value === "string" ? value : undefined;
-  } catch {
-    return undefined;
-  }
+function traceToolLabel(name: string): { label: string; detail?: string } {
+  if (name === "search_workspace") return { label: "查找相关材料" };
+  if (name === "read_chunk") return { label: "查看相关材料" };
+  if (name === "read_file" || name === "read_user_file") return { label: "查看文件内容" };
+  if (name === "list_files") return { label: "梳理材料清单" };
+  if (name === "get_index_status") return { label: "确认材料索引" };
+  if (name === "generate_docx") return { label: "生成文书文件" };
+  if (name === "ask_user") return { label: "发现还需要补充信息" };
+  return { label: "处理辅助任务" };
 }
 
 function normalizeClarification(payload: Record<string, unknown>): ClarificationRequest | undefined {
@@ -278,27 +257,29 @@ function applyTraceToWorkflow(workflow: WorkflowState, e: AgentTraceEvent): Work
   const p = e.payload ?? {};
   switch (e.kind) {
     case "turn_start":
-      return upsertStep(workflow, "prepare", "intent", "接收需求", "done", e.seq);
+      return workflow;
     case "classify_start":
-      return upsertStep(workflow, "intent", "intent", "识别任务意图", "run", e.seq);
+      return upsertStep(workflow, "intent", "intent", "判断事项类型", "run", e.seq, undefined, e.ts_ms);
     case "classify_result": {
-      const label = p.label ? `识别任务意图：${p.label}` : "识别任务意图";
-      return markStep(
-        upsertStep(
-          {
-            ...workflow,
-            mode: typeof p.mode === "string" ? p.mode : workflow.mode,
-            mode_label: typeof p.label === "string" ? p.label : workflow.mode_label,
-          },
-          "intent",
-          "intent",
-          label,
-          "done",
-          e.seq,
-          typeof p.reason === "string" ? clipText(p.reason, 64) : undefined,
-        ),
-        "prepare",
+      const label =
+        p.source === "fallback"
+          ? "已用本地规则判断事项类型"
+          : p.label
+            ? `已确认事项类型：${p.label}`
+            : "已确认事项类型";
+      return upsertStep(
+        {
+          ...workflow,
+          mode: typeof p.mode === "string" ? p.mode : workflow.mode,
+          mode_label: typeof p.label === "string" ? p.label : workflow.mode_label,
+        },
+        "intent",
+        "intent",
+        label,
         "done",
+        e.seq,
+        undefined,
+        e.ts_ms,
       );
     }
     case "skill_activated": {
@@ -307,22 +288,20 @@ function applyTraceToWorkflow(workflow: WorkflowState, e: AgentTraceEvent): Work
         workflow,
         `skill-${name}`,
         "skill",
-        `激活技能「${name}」`,
+        "选用合适的法律能力",
         "done",
         e.seq,
-        typeof p.description === "string" ? clipText(p.description, 56) : undefined,
+        undefined,
+        e.ts_ms,
       );
     }
     case "thinking":
     case "thinking_delta":
-      return upsertStep(workflow, "thinking", "thinking", "深度思考", "run", e.seq);
+      return upsertStep(workflow, "thinking", "thinking", "梳理问题和处理思路", "run", e.seq, undefined, e.ts_ms);
     case "tool_call": {
       const name = typeof p.name === "string" ? p.name : "tool";
       if (name === "select_skill") return workflow;
-      const label = traceToolLabel(
-        name,
-        typeof p.arguments === "string" ? p.arguments : "",
-      );
+      const label = traceToolLabel(name);
       return upsertStep(
         workflow,
         `tool-${name}`,
@@ -331,6 +310,7 @@ function applyTraceToWorkflow(workflow: WorkflowState, e: AgentTraceEvent): Work
         "run",
         e.seq,
         label.detail,
+        e.ts_ms,
       );
     }
     case "tool_result": {
@@ -343,9 +323,11 @@ function applyTraceToWorkflow(workflow: WorkflowState, e: AgentTraceEvent): Work
         workflow,
         "clarify",
         "clarify",
-        "确认缺失信息",
+        "已列出待补充问题",
         "done",
         e.seq,
+        undefined,
+        e.ts_ms,
       );
       next = upsertStep(
         next,
@@ -354,6 +336,8 @@ function applyTraceToWorkflow(workflow: WorkflowState, e: AgentTraceEvent): Work
         "等待补充信息",
         "run",
         e.seq,
+        undefined,
+        e.ts_ms,
       );
       return {
         ...next,
@@ -365,21 +349,21 @@ function applyTraceToWorkflow(workflow: WorkflowState, e: AgentTraceEvent): Work
     case "stream_delta": {
       const mode = workflow.mode;
       const label =
-        mode === "evidence" ? "撰写分析报告" : mode === "draft" ? "起草正文" : "生成回复";
-      return upsertStep(workflow, "draft", "draft", label, "run", e.seq);
+        mode === "evidence" ? "撰写分析报告" : mode === "draft" ? "起草正文" : "生成答复";
+      return upsertStep(workflow, "draft", "draft", label, "run", e.seq, undefined, e.ts_ms);
     }
     case "stream_done":
       return markStep(workflow, "draft", "done");
     case "error":
       return {
-        ...upsertStep(workflow, "error", "error", "请求出错", "error", e.seq),
+        ...upsertStep(workflow, "error", "error", "处理时遇到问题", "error", e.seq, undefined, e.ts_ms),
         status: "error",
       };
     case "turn_end": {
       if (workflow.status === "waiting") return workflow;
       if (p.ok === false) {
         return {
-          ...upsertStep(workflow, "error", "error", "请求出错", "error", e.seq),
+          ...upsertStep(workflow, "error", "error", "处理时遇到问题", "error", e.seq, undefined, e.ts_ms),
           status: "error",
         };
       }
@@ -388,9 +372,11 @@ function applyTraceToWorkflow(workflow: WorkflowState, e: AgentTraceEvent): Work
           { ...workflow, steps: closeRunningSteps(workflow.steps) },
           "complete",
           "complete",
-          "完成",
+          "处理完成",
           "done",
           e.seq,
+          undefined,
+          e.ts_ms,
         ),
         status: "complete",
       };
@@ -534,7 +520,12 @@ function metadataForMessage(msg: Message): MessageMetadata | undefined {
 }
 
 function messageDisplayContent(msg: Message): string {
-  return metadataForMessage(msg)?.display_content ?? msg.content;
+  const meta = metadataForMessage(msg);
+  if (meta?.display_content) return meta.display_content;
+  if (meta?.content_hidden) {
+    return "已生成草稿，正文见右侧文书预览。如有修改意见请继续补充。";
+  }
+  return msg.content;
 }
 
 function workflowForMessageId(messageId: string): WorkflowState | undefined {
@@ -553,6 +544,10 @@ function activeWorkflowSnapshot(): WorkflowState | undefined {
     if (wf.status === "running" || wf.status === "waiting") return wf;
   }
   return undefined;
+}
+
+function isAgentModeValue(mode: unknown): mode is AgentMode {
+  return mode === "chat" || mode === "draft" || mode === "evidence";
 }
 
 function buildMessageMetadata(
@@ -610,8 +605,11 @@ function completeWorkflowSnapshot(messageId: string): WorkflowState | undefined 
     { ...current, steps: closeRunningSteps(current.steps) },
     "complete",
     "complete",
-    "完成",
+    "处理完成",
     "done",
+    undefined,
+    undefined,
+    Date.now(),
   );
   const next: WorkflowState = { ...complete, status: "complete" };
   setWorkflowByMessageId((prev) => ({ ...prev, [messageId]: next }));
@@ -624,7 +622,8 @@ function workflowHasPendingClarification(workflow: WorkflowState | undefined): b
 
 function answerTextFromClarification(answers: ClarificationAnswer[]): string {
   const lines = answers.map(
-    (answer, index) => `${index + 1}. ${answer.question}\n回答：${answer.answer}`,
+    (answer, index) =>
+      `${index + 1}. ${answer.question}\n回答：${answer.display_answer || answer.answer}`,
   );
   return `以下是补充信息，请基于这些答案继续推进起草：\n\n${lines.join("\n\n")}`;
 }
@@ -683,20 +682,35 @@ export function useConversation() {
     }
   }
 
-  async function removeConversation(id: string) {
+  async function removeConversation(id: string): Promise<string | null> {
+    const wasActive = activeConversationId() === id;
+    const nextActiveId = wasActive
+      ? conversations().find((c) => c.id !== id)?.id ?? null
+      : activeConversationId();
     try {
       await deleteConversationApi(id);
     } catch (e) {
       console.error("删除会话失败:", e);
+      throw e;
     }
     setConversations((prev) => prev.filter((c) => c.id !== id));
-    if (activeConversationId() === id) {
-      const remaining = conversations().filter((c) => c.id !== id);
-      setActiveConversationId(remaining.length > 0 ? remaining[0].id : null);
+    if (wasActive) {
+      if (nextActiveId) {
+        await switchConversation(nextActiveId);
+        return nextActiveId;
+      }
+      setActiveConversationId(null);
       setMessages([]);
       setWorkflowByMessageId({});
+      setPendingContextRefs([]);
+      clearStreamWatchdog();
+      setStreamingContent("");
+      setStreamPhase(null);
+      setIsStreaming(false);
+      setDraftWorkflowActive(false);
       clearDocumentState();
     }
+    return nextActiveId;
   }
 
   async function switchConversation(id: string) {
@@ -811,7 +825,11 @@ export function useConversation() {
           contentHidden = true;
         }
       } else {
-        await tryApplyDocumentFromContent(content);
+        const parsed = await tryApplyDocumentFromContent(content);
+        if (parsed) {
+          displayContent = draftCompletionSummary(docMeta().title || "法律文书");
+          contentHidden = true;
+        }
       }
 
       const metadata = buildMessageMetadata(workflow, displayContent, contentHidden);
@@ -896,6 +914,25 @@ export function useConversation() {
   }
 
   function ingestAgentTrace(event: AgentTraceEvent) {
+    if (event.kind === "classify_result") {
+      const mode = event.payload?.mode;
+      if (isAgentModeValue(mode)) {
+        setWorkspaceMode(mode);
+        setWorkspaceModeLabel(
+          typeof event.payload.label === "string" ? event.payload.label : "",
+        );
+        setActiveDraftResponse(mode === "draft");
+        setActiveEvidenceResponse(mode === "evidence");
+        if (mode === "draft") {
+          setDraftWorkflowActive(true);
+        } else if (mode === "evidence") {
+          setDraftWorkflowActive(false);
+          setStreamPhase("indexing");
+        } else {
+          setDraftWorkflowActive(false);
+        }
+      }
+    }
     setWorkflowByMessageId((prev) => {
       const current = prev[event.message_id] ?? emptyWorkflow(event);
       return {
@@ -937,7 +974,7 @@ export function useConversation() {
       attachMetadataToMessage(messageId, metadata);
       persistMessageMetadata(messageId, metadata);
     }
-    return sendChatMessage(answerTextFromClarification(answers));
+    return sendChatMessage(answerTextFromClarification(answers), { uiHidden: true });
   }
 
   async function resolveAgentMode(content: string, refs: ContextRefPayload[]) {
@@ -976,7 +1013,10 @@ export function useConversation() {
     }
   }
 
-  function sendChatMessage(text: string): Promise<void> {
+  function sendChatMessage(
+    text: string,
+    options: { uiHidden?: boolean } = {},
+  ): Promise<void> {
     const convId = activeConversationId();
     const trimmed = text.trim();
     const refs = mergeDirectoryRefs(trimmed, pendingContextRefs());
@@ -992,41 +1032,34 @@ export function useConversation() {
       }
     }
 
-    addMessage({
-      id: `pending-user-${Date.now()}`,
+    if (!options.uiHidden) {
+      addMessage({
+        id: `pending-user-${Date.now()}`,
+        conversation_id: convId,
+        role: "user",
+        content: trimmed || (refs.length > 0 ? `[已附加 ${refs.length} 项本地资料]` : ""),
+        created_at: new Date().toISOString(),
+      });
+    }
+
+    setActiveDraftResponse(false);
+    setActiveEvidenceResponse(false);
+    setDraftWorkflowActive(false);
+    startStreaming();
+
+    return sendMessage({
       conversation_id: convId,
-      role: "user",
-      content: trimmed || (refs.length > 0 ? `[已附加 ${refs.length} 项本地资料]` : ""),
-      created_at: new Date().toISOString(),
-    });
-
-    return resolveAgentMode(trimmed || "分析附加的本地资料", refs)
-      .then((classification) => {
-        const isDocDraft = classification.mode === "draft";
-        const isEvidenceFlow = classification.mode === "evidence";
-        setActiveDraftResponse(isDocDraft);
-        setActiveEvidenceResponse(isEvidenceFlow);
-        if (isDocDraft) {
-          setDraftWorkflowActive(true);
-        } else if (isEvidenceFlow) {
-          setDraftWorkflowActive(false);
-          setStreamPhase("indexing");
-        } else {
-          setDraftWorkflowActive(false);
-        }
-        startStreaming();
-
-        return sendMessage({
-          conversation_id: convId,
-          content: trimmed,
-          context_refs: refs.length > 0 ? refs : undefined,
-        }).then((messageId) => {
-          setTimeout(() => {
-            if (isStreaming()) {
-              void finishStreaming(messageId);
-            }
-          }, 250);
-        });
+      content: trimmed,
+      context_refs: refs.length > 0 ? refs : undefined,
+      ui_hidden: options.uiHidden || undefined,
+    })
+      .then((messageId) => {
+        void loadConversations();
+        setTimeout(() => {
+          if (isStreaming()) {
+            void finishStreaming(messageId);
+          }
+        }, 250);
       })
       .catch((e) => {
         console.error("发送消息失败:", e);

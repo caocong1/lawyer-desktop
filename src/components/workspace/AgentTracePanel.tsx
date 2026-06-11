@@ -185,10 +185,23 @@ function entrySpec(
             <Show when={p.label}>
               <Chip>{p.label}</Chip>
             </Show>
+            <Show when={p.source === "fallback"}>
+              <Chip tone="gold">本地规则</Chip>
+            </Show>
             <Chip tone="dim">{fmtDuration(p.duration_ms)}</Chip>
           </>
         ),
-        body: p.reason ? <div class="tp-note">{p.reason}</div> : undefined,
+        body:
+          p.reason || p.diagnostic ? (
+            <div class="tp-note">
+              <Show when={p.reason}>
+                <div>{p.reason}</div>
+              </Show>
+              <Show when={p.diagnostic}>
+                <div>{p.diagnostic}</div>
+              </Show>
+            </div>
+          ) : undefined,
       };
     case "history_loaded":
       return {

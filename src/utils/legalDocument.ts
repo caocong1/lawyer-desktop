@@ -69,9 +69,77 @@ function riskNote(level: string | undefined): ArticleNote | undefined {
   };
 }
 
+function stripMarkdownLineNoise(line: string): string {
+  return line
+    .trim()
+    .replace(/^>\s*/, "")
+    .replace(/^#{1,6}\s+/, "")
+    .trim();
+}
+
+function stripMarkdownInlineNoise(text: string): string {
+  return text
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/^[*-]\s+/, "")
+    .trim();
+}
+
 function textToSegments(text: string): TextSegment[] {
-  const t = text.trim();
-  return t ? [{ t }] : [];
+  const t = stripMarkdownInlineNoise(text.trim());
+  if (!t) return [];
+
+  const segments: TextSegment[] = [];
+  const boldRe = /\*\*([^*]+)\*\*/g;
+  let last = 0;
+  for (const match of t.matchAll(boldRe)) {
+    const index = match.index ?? 0;
+    const plain = t.slice(last, index);
+    if (plain) segments.push({ t: plain });
+    if (match[1]) segments.push({ b: match[1].trim() });
+    last = index + match[0].length;
+  }
+  const tail = t.slice(last);
+  if (tail) segments.push({ t: tail });
+  return segments.length > 0 ? segments : [{ t }];
+}
+
+function isHorizontalRule(line: string): boolean {
+  return /^-{3,}$|^\*{3,}$|^_{3,}$/.test(line.trim());
+}
+
+function isParagraphStart(line: string): boolean {
+  return (
+    /^(?:[一二三四五六七八九十百零\d]+[、.．]|[（(][一二三四五六七八九十百零\d]+[）)]|第[一二三四五六七八九十百零\d]+[章节条款])/.test(line) ||
+    /^(原告|被告|甲方|乙方|上诉人|被上诉人|申请人|被申请人|委托人|受托人|代理人|具状人|此致)[：:\s]/.test(line)
+  );
+}
+
+function textToParagraphs(text: string): TextSegment[][] {
+  const paras: string[] = [];
+  let current: string[] = [];
+
+  const flush = () => {
+    const para = current.join(" ").replace(/\s+/g, " ").trim();
+    if (para) paras.push(para);
+    current = [];
+  };
+
+  for (const raw of text.split(/\r?\n/)) {
+    const line = stripMarkdownLineNoise(raw);
+    if (!line || isHorizontalRule(line)) {
+      flush();
+      continue;
+    }
+    if (current.length > 0 && isParagraphStart(line)) {
+      flush();
+    }
+    current.push(line);
+  }
+  flush();
+
+  const segments = paras.map(textToSegments).filter((para) => para.length > 0);
+  return segments.length > 0 ? segments : [textToSegments(text)].filter((para) => para.length > 0);
 }
 
 export function modelToParties(model: LegalDocumentModel): DocParty[] {
@@ -93,11 +161,6 @@ export function modelToRecital(model: LegalDocumentModel): TextSegment[] {
     return textToSegments(recitalSection.content);
   }
 
-  const first = model.sections[0];
-  if (first && !first.clauses?.length && first.content) {
-    return textToSegments(first.content);
-  }
-
   return [];
 }
 
@@ -109,8 +172,8 @@ export function modelToArticles(model: LegalDocumentModel): Article[] {
       for (const clause of section.clauses) {
         articles.push({
           id: clause.id,
-          title: clause.title ?? section.heading ?? clause.id,
-          paras: [textToSegments(clause.text)],
+          title: normalizedArticleTitle(clause.title ?? section.heading ?? clause.id),
+          paras: textToParagraphs(clause.text),
           note: riskNote(clause.risk_level),
         });
       }
@@ -120,8 +183,8 @@ export function modelToArticles(model: LegalDocumentModel): Article[] {
       if (!skipRecital) {
         articles.push({
           id: section.id ?? `section-${articles.length + 1}`,
-          title: section.heading ?? `第${cnNum(articles.length + 1)}条`,
-          paras: [textToSegments(section.content)],
+          title: normalizedArticleTitle(section.heading ?? `第${cnNum(articles.length + 1)}条`),
+          paras: textToParagraphs(section.content),
         });
       }
     }
@@ -189,6 +252,14 @@ const TOOL_LEAK_RE =
 
 const INSTRUCTION_TITLE_RE = /^(写一份|起草|生成|帮我|请)/;
 
+const PARTY_LINE_RE =
+  /^(原告|被告|甲方|乙方|上诉人|被上诉人|申请人|被申请人|委托人|受托人|代理人)[^：:\n]*[：:]\s*(.+)$/;
+
+const SECTION_HEADING_RE =
+  /^(使用说明|当事人|诉讼请求|事实与理由|事实和理由|证据与附件目录|证据和证据来源|证据目录|附件目录|法律依据|风险提示|律师意见|请求事项|仲裁请求|答辩意见|此致|具状人|落款)$/;
+
+const NUMBERED_ARTICLE_RE = /^第[一二三四五六七八九十百零\d]+[条章节款][、.．：:\s]*(.*)$/;
+
 /** Model sometimes leaks tool-call markup into plain text — never show as document body. */
 export function containsToolLeakage(text: string): boolean {
   return TOOL_LEAK_RE.test(text);
@@ -221,7 +292,9 @@ export function sanitizeLlmDocumentContent(text: string): string {
 }
 
 export function looksLikeLegalProse(text: string): boolean {
-  const markers = text.match(/甲方|乙方|合同|协议|租赁|承租|出租|条款|鉴于|双方|违约责任/g);
+  const markers = text.match(
+    /甲方|乙方|合同|协议|租赁|承租|出租|条款|鉴于|双方|违约责任|起诉状|答辩状|上诉状|申请书|律师函|代理词|原告|被告|诉讼请求|事实与理由|证据|此致|人民法院|仲裁|保全|执行/g,
+  );
   if ((markers?.length ?? 0) >= 2) return true;
   const clauses = text.match(/第[一二三四五六七八九十百零\d]+条/g);
   return (clauses?.length ?? 0) >= 2;
@@ -239,6 +312,16 @@ function inferDocumentTitle(md: string, fallbackTitle?: string): string {
   const h1 = md.match(/^#\s+(.+)$/m);
   if (h1) return h1[1].trim();
 
+  const firstTitle = normalizeMarkdownLines(md)
+    .map(cleanHeading)
+    .find(
+      (line) =>
+        line.length >= 2 &&
+        line.length <= 40 &&
+        /(?:起诉状|答辩状|上诉状|申请书|律师函|代理词|合同|协议|报告)$/.test(line),
+    );
+  if (firstTitle) return firstTitle;
+
   const book = md.match(/[《]([^》]+)[》]/);
   if (book) return book[1].trim();
 
@@ -249,6 +332,128 @@ function inferDocumentTitle(md: string, fallbackTitle?: string): string {
   if (fb && !isInstructionLikeTitle(fb)) return fb;
 
   return "法律文书";
+}
+
+function cleanHeading(raw: string): string {
+  return stripMarkdownInlineNoise(stripMarkdownLineNoise(raw))
+    .replace(/\*\*/g, "")
+    .replace(/^#+\s*/, "")
+    .replace(/^[一二三四五六七八九十百零\d]+[、.．]\s*/, "")
+    .trim();
+}
+
+function normalizedArticleTitle(title: string): string {
+  const clean = cleanHeading(title);
+  const numbered = clean.match(NUMBERED_ARTICLE_RE);
+  return (numbered?.[1]?.trim() || clean || "正文").replace(/^正文[：:]\s*/, "") || "正文";
+}
+
+function normalizeMarkdownLines(md: string): string[] {
+  return md
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line) => !isHorizontalRule(stripMarkdownLineNoise(line)));
+}
+
+function isDocumentTitleLine(line: string, title: string): boolean {
+  const clean = cleanHeading(line);
+  return !!clean && clean === title;
+}
+
+function headingFromLine(line: string, title: string): string | null {
+  const clean = cleanHeading(line);
+  if (!clean || clean === title) return null;
+  if (/^#{1,6}\s+/.test(line.trim())) return normalizedArticleTitle(clean);
+  const numbered = clean.match(NUMBERED_ARTICLE_RE);
+  if (numbered) return normalizedArticleTitle(clean);
+  if (SECTION_HEADING_RE.test(clean)) return clean;
+  return null;
+}
+
+function inlineHeadingFromLine(
+  line: string,
+): { heading: string; content: string } | null {
+  const clean = stripMarkdownLineNoise(line);
+  const match = clean.match(/^\*?\*?(使用说明|风险提示|律师意见|法律依据)\*?\*?[：:]\s*(.+)$/);
+  if (!match) return null;
+  return {
+    heading: match[1],
+    content: match[2].trim(),
+  };
+}
+
+function partyFromLine(
+  line: string,
+): NonNullable<LegalDocumentModel["parties"]>[number] | null {
+  const clean = stripMarkdownLineNoise(line);
+  const match = clean.match(PARTY_LINE_RE);
+  if (!match) return null;
+  const role = match[1];
+  const rest = stripMarkdownInlineNoise(match[2]);
+  const [nameRaw, ...details] = rest.split(/[，,]/);
+  const name = nameRaw.trim();
+  if (!name) return null;
+  return {
+    role,
+    name,
+    details: details.join("，").trim() || undefined,
+  };
+}
+
+function sectionsFromMarkdownBody(
+  lines: string[],
+  title: string,
+): LegalDocumentModel["sections"] {
+  const sections: LegalDocumentModel["sections"] = [];
+  let heading = "正文";
+  let buffer: string[] = [];
+
+  const flush = () => {
+    const content = buffer.join("\n").trim();
+    if (content) {
+      sections.push({
+        id: `section-${sections.length + 1}`,
+        heading: normalizedArticleTitle(heading),
+        content,
+      });
+    }
+    buffer = [];
+  };
+
+  for (const raw of lines) {
+    if (isDocumentTitleLine(raw, title)) continue;
+    const clean = stripMarkdownLineNoise(raw);
+    if (!clean) {
+      buffer.push("");
+      continue;
+    }
+    const nextHeading = headingFromLine(raw, title);
+    if (nextHeading) {
+      flush();
+      heading = nextHeading;
+      continue;
+    }
+    const inlineHeading = inlineHeadingFromLine(raw);
+    if (inlineHeading) {
+      flush();
+      heading = inlineHeading.heading;
+      buffer.push(inlineHeading.content);
+      continue;
+    }
+    if (partyFromLine(clean)) continue;
+    buffer.push(clean);
+  }
+  flush();
+
+  return sections.length > 0
+    ? sections
+    : [
+        {
+          id: "body",
+          heading: "正文",
+          content: lines.map(stripMarkdownLineNoise).join("\n").trim(),
+        },
+      ];
 }
 
 /** Build a preview model from plain-markdown LLM output when JSON is absent. */
@@ -263,50 +468,13 @@ export function markdownToLegalDocument(
   const title = inferDocumentTitle(md, fallbackTitle);
 
   const parties: LegalDocumentModel["parties"] = [];
-  for (const line of md.split("\n")) {
-    const m = line.match(/^\*?\*?(甲方|乙方)[^*：:\n]*\*?\*?[：:]\s*(.+)/);
-    if (m) {
-      parties.push({
-        role: m[1],
-        name: m[2].replace(/\*+/g, "").trim(),
-      });
-    }
+  const lines = normalizeMarkdownLines(md);
+  for (const line of lines) {
+    const party = partyFromLine(line);
+    if (party) parties.push(party);
   }
 
-  let body = md;
-  const h1 = md.match(/^#\s+(.+)$/m);
-  if (h1) body = md.replace(/^#\s+.+\n*/m, "").trim();
-
-  const clauseParts = body.split(
-    /(?=^#{1,3}\s+第|^第[一二三四五六七八九十百零\d]+条)/m,
-  );
-
-  const sections: LegalDocumentModel["sections"] = [];
-
-  if (clauseParts.length > 1) {
-    const preamble = clauseParts[0].trim();
-    if (preamble) {
-      sections.push({ id: "recital", heading: "鉴于", content: preamble });
-    }
-    for (const part of clauseParts.slice(1)) {
-      const lines = part.trim().split("\n");
-      const heading = lines[0]?.replace(/^#+\s*/, "").trim() || "条款";
-      const content = lines.slice(1).join("\n").trim() || part.trim();
-      sections.push({
-        id: `clause-${sections.length}`,
-        heading,
-        content,
-        clauses: [{ id: `c-${sections.length}`, title: heading, text: content }],
-      });
-    }
-  } else {
-    sections.push({
-      id: "body",
-      heading: "正文",
-      content: body,
-      clauses: [{ id: "c-1", title: "正文", text: body }],
-    });
-  }
+  const sections = sectionsFromMarkdownBody(lines, title);
 
   return {
     title,

@@ -38,6 +38,16 @@ pub struct ClassifyResult {
     pub mode: AgentMode,
     pub label: String,
     pub reason: String,
+    #[serde(default = "default_classify_source")]
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<String>,
+}
+
+fn default_classify_source() -> String {
+    "llm".into()
 }
 
 #[derive(Debug, Deserialize)]
@@ -121,30 +131,92 @@ pub async fn classify_agent_mode(
         }
         Err(e) => {
             log::warn!("agent classify LLM failed: {}, using fallback", e);
-            fallback_classify(ctx)
+            let (reason, diagnostic) = classify_error_diagnostic(&e);
+            fallback_classify(ctx, reason, Some(diagnostic))
         }
     }
 }
 
 fn parse_classifier_response(raw: &str, ctx: &ClassifyContext) -> ClassifyResult {
     let trimmed = raw.trim();
-    let json_str = extract_json_object(trimmed).unwrap_or(trimmed);
-
-    if let Ok(parsed) = serde_json::from_str::<ClassifierJson>(json_str) {
-        if let Some(mode) = parse_mode_str(&parsed.mode) {
-            return ClassifyResult {
-                mode,
-                label: parsed
-                    .label
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| mode.ui_label().to_string()),
-                reason: parsed.reason.unwrap_or_default(),
-            };
-        }
+    if trimmed.is_empty() {
+        log::warn!("agent classify returned empty content");
+        return fallback_classify(ctx, "empty_response", Some("分类模型返回空内容".into()));
     }
 
-    log::warn!("agent classify parse failed, raw={}", trimmed);
-    fallback_classify(ctx)
+    let Some(json_str) = extract_json_object(trimmed) else {
+        log::warn!("agent classify parse failed, raw={}", trimmed);
+        return fallback_classify(
+            ctx,
+            "invalid_json",
+            Some("分类返回格式异常：未找到 JSON 对象".into()),
+        );
+    };
+
+    match serde_json::from_str::<ClassifierJson>(json_str) {
+        Ok(parsed) => {
+            if let Some(mode) = parse_mode_str(&parsed.mode) {
+                return ClassifyResult {
+                    mode,
+                    label: parsed
+                        .label
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| mode.ui_label().to_string()),
+                    reason: parsed.reason.unwrap_or_default(),
+                    source: "llm".into(),
+                    fallback_reason: None,
+                    diagnostic: None,
+                };
+            }
+            log::warn!("agent classify invalid mode: {}", parsed.mode);
+            fallback_classify(
+                ctx,
+                "invalid_mode",
+                Some(format!("分类返回了无法识别的模式：{}", parsed.mode)),
+            )
+        }
+        Err(e) => {
+            log::warn!("agent classify JSON parse failed: {}", e);
+            fallback_classify(
+                ctx,
+                "invalid_json",
+                Some(format!("分类返回格式异常：{}", e)),
+            )
+        }
+    }
+}
+
+pub fn validate_classifier_response(raw: &str, ctx: &ClassifyContext) -> ClassifyResult {
+    parse_classifier_response(raw, ctx)
+}
+
+fn classify_error_diagnostic(error: &anyhow::Error) -> (&'static str, String) {
+    let msg = error.to_string();
+    let lower = msg.to_lowercase();
+    let reason = if lower.contains("401") || lower.contains("403") {
+        "auth_failed"
+    } else if lower.contains("404") {
+        "model_not_found"
+    } else if lower.contains("timeout") || lower.contains("timed out") {
+        "timeout"
+    } else if lower.contains("failed to parse llm response") {
+        "response_parse_failed"
+    } else if lower.contains("failed to send") || lower.contains("dns") || lower.contains("connect")
+    {
+        "network_error"
+    } else {
+        "request_failed"
+    };
+    (reason, compact_diagnostic(&msg, 180))
+}
+
+fn compact_diagnostic(text: &str, max_chars: usize) -> String {
+    let cleaned = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if cleaned.chars().count() <= max_chars {
+        return cleaned;
+    }
+    let head = cleaned.chars().take(max_chars).collect::<String>();
+    format!("{}…", head)
 }
 
 fn extract_json_object(text: &str) -> Option<&str> {
@@ -174,8 +246,12 @@ fn parse_mode_str(s: &str) -> Option<AgentMode> {
     }
 }
 
-/// When the fast model is unavailable or returns garbage — structural fallback only (no regex on user text).
-fn fallback_classify(ctx: &ClassifyContext) -> ClassifyResult {
+/// Structural fallback only (no regex on user text).
+fn fallback_classify(
+    ctx: &ClassifyContext,
+    fallback_reason: &str,
+    diagnostic: Option<String>,
+) -> ClassifyResult {
     let mode = if ctx.has_directory_ref {
         AgentMode::Evidence
     } else {
@@ -183,8 +259,11 @@ fn fallback_classify(ctx: &ClassifyContext) -> ClassifyResult {
     };
     ClassifyResult {
         label: mode.ui_label().to_string(),
-        reason: "分类模型不可用，已使用结构回退".into(),
+        reason: "已用本地规则判断事项类型".into(),
         mode,
+        source: "fallback".into(),
+        fallback_reason: Some(fallback_reason.into()),
+        diagnostic,
     }
 }
 
@@ -205,6 +284,7 @@ mod tests {
             &ctx,
         );
         assert_eq!(r.mode, AgentMode::Evidence);
+        assert_eq!(r.source, "llm");
     }
 
     #[test]
@@ -215,7 +295,37 @@ mod tests {
             has_file_ref: false,
             directory_aliases: vec![],
         };
-        let r = fallback_classify(&ctx);
+        let r = fallback_classify(&ctx, "request_failed", Some("boom".into()));
         assert_eq!(r.mode, AgentMode::Evidence);
+        assert_eq!(r.source, "fallback");
+        assert_eq!(r.fallback_reason.as_deref(), Some("request_failed"));
+    }
+
+    #[test]
+    fn fallback_keeps_invalid_json_diagnostic() {
+        let ctx = ClassifyContext {
+            user_message: "请解释合同解除".into(),
+            has_directory_ref: false,
+            has_file_ref: false,
+            directory_aliases: vec![],
+        };
+        let r = parse_classifier_response("不是 JSON", &ctx);
+        assert_eq!(r.mode, AgentMode::Chat);
+        assert_eq!(r.source, "fallback");
+        assert_eq!(r.fallback_reason.as_deref(), Some("invalid_json"));
+        assert!(r.diagnostic.unwrap_or_default().contains("JSON"));
+    }
+
+    #[test]
+    fn fallback_keeps_invalid_mode_diagnostic() {
+        let ctx = ClassifyContext {
+            user_message: "请起草合同".into(),
+            has_directory_ref: false,
+            has_file_ref: false,
+            directory_aliases: vec![],
+        };
+        let r = parse_classifier_response(r#"{"mode":"other"}"#, &ctx);
+        assert_eq!(r.source, "fallback");
+        assert_eq!(r.fallback_reason.as_deref(), Some("invalid_mode"));
     }
 }

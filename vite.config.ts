@@ -37,7 +37,8 @@ export default defineConfig({
       process.env.TAURI_ENV_PLATFORM === "windows"
         ? "chrome105"
         : "safari13",
-    minify: !process.env.TAURI_ENV_DEBUG ? "esbuild" : false,
+    // vite 8 (rolldown) no longer bundles esbuild; oxc is its native minifier
+    minify: !process.env.TAURI_ENV_DEBUG ? "oxc" : false,
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
   },
 });

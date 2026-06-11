@@ -113,9 +113,84 @@
   margin-top: 0;
 }
 
-.clarify-card {
-  padding: 12px 14px 14px;
+.workflow-notice {
+  width: calc(100% - 28px);
+  margin: 10px auto;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-2) 82%, transparent);
+  color: var(--ink-soft);
+  overflow: hidden;
+}
+
+.workflow-notice-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 7px 11px;
+  font-size: 12px;
+}
+
+.workflow-notice-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: 0 0 auto;
+}
+
+.workflow-notice.running .workflow-notice-dot,
+.workflow-notice.waiting .workflow-notice-dot {
+  animation: stream-pulse 1.2s ease-in-out infinite;
+}
+
+.workflow-notice.error .workflow-notice-dot {
+  background: var(--danger, #c94f45);
+}
+
+.workflow-notice-title {
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.workflow-notice-summary {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-notice-toggle {
+  margin-left: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+  padding: 3px 7px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.workflow-notice-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.workflow-notice-steps {
   border-top: 1px solid var(--line-soft);
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+}
+
+.workflow-notice-steps .draft-step {
+  padding: 8px 11px;
+}
+
+.clarify-card {
+  margin: 6px 0 0;
+  padding: 12px 14px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
   background: color-mix(in srgb, var(--surface-2) 68%, transparent);
 }
 

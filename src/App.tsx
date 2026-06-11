@@ -1,5 +1,6 @@
 import { createSignal, Show, onMount } from "solid-js";
 import { HomePage } from "./components/home/HomePage";
+import { ConversationDrawer } from "./components/layout/ConversationDrawer";
 import { TitleBar } from "./components/layout/TitleBar";
 import { Workspace } from "./components/workspace/Workspace";
 import { SettingsPanel } from "./components/settings/SettingsPanel";
@@ -16,6 +17,7 @@ export default function App() {
   const [prompt, setPrompt] = createSignal<string>("");
   const [toast, setToast] = createSignal("");
   const [settingsOpen, setSettingsOpen] = createSignal(false);
+  const [conversationListOpen, setConversationListOpen] = createSignal(false);
   const [loading, setLoading] = createSignal(true);
   const { restoreProvider, isConfigured } = useSettings();
   const { loadConversations, activeConversationId, setActiveConversationId, addConversation, switchConversation, messages } =
@@ -66,17 +68,14 @@ export default function App() {
     }
   }
 
-  function pickType(prompt: string) {
-    void start(prompt);
-  }
-
-  async function openRecent(id: string) {
+  async function openConversation(id: string) {
     await switchConversation(id);
     const msgs = messages();
     const firstUser = msgs.find((m) => m.role === "user");
     setPrompt(firstUser?.content || "");
     setDraftKey((k) => k + 1);
     setScreen("workspace");
+    setConversationListOpen(false);
   }
 
   return (
@@ -90,6 +89,7 @@ export default function App() {
       <TitleBar
         screen={screen()}
         onGoHome={() => setScreen("home")}
+        onOpenConversations={() => setConversationListOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
       />
 
@@ -100,8 +100,7 @@ export default function App() {
             <div class="screen anim">
               <HomePage
                 onStart={(p) => void start(p)}
-                onPickType={pickType}
-                onOpenRecent={(id) => void openRecent(id)}
+                onOpenConversations={() => setConversationListOpen(true)}
                 onToast={showToast}
               />
             </div>
@@ -124,6 +123,17 @@ export default function App() {
           onSaved={(msg) => showToast(msg)}
         />
       </Show>
+
+      <ConversationDrawer
+        open={conversationListOpen()}
+        onClose={() => setConversationListOpen(false)}
+        onOpenConversation={(id) => void openConversation(id)}
+        onDeletedEmpty={() => {
+          setPrompt("");
+          setScreen("home");
+        }}
+        onToast={showToast}
+      />
     </div>
   );
 }

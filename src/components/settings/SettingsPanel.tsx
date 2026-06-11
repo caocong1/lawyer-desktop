@@ -135,9 +135,9 @@ export function SettingsPanel(props: SettingsPanelProps) {
         ...fastProviderPayload(true),
         api_key: await resolveFastApiKeyForRequest(),
       });
-      setFastTestResult(`✅ 连接成功: ${result}`);
+      setFastTestResult(`✅ ${result}`);
     } catch (e) {
-      setFastTestResult(`❌ 连接失败: ${String(e)}`);
+      setFastTestResult(`❌ ${String(e)}`);
     }
     setFastTesting(false);
   }

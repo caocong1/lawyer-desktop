@@ -17,6 +17,7 @@ export interface WorkflowStep {
   state: WorkflowStepState;
   detail?: string;
   seq?: number;
+  ts_ms?: number;
 }
 
 export interface ClarificationOption {
@@ -37,6 +38,7 @@ export interface ClarificationAnswer {
   question_id: string;
   question: string;
   answer: string;
+  display_answer?: string;
 }
 
 export interface ClarificationRequest {

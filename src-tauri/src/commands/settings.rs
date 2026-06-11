@@ -11,6 +11,7 @@ use crate::mcp::manager::McpManager;
 use crate::mcp::types::McpServerHealth;
 use crate::security::key_store::KeyStore;
 use crate::security::path_sandbox::PathSandbox;
+use crate::skills::agent_classifier::{self, ClassifyContext};
 use crate::skills::SkillRegistry;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -149,16 +150,36 @@ pub async fn test_fast_provider(
     key_store: State<'_, Arc<KeyStore>>,
     req: FastProviderSetupRequest,
 ) -> Result<String, String> {
+    use crate::llm::openai_compat::OpenAiCompatProvider;
+
     let api_key = resolve_fast_api_key(&db, &key_store, req.api_key.as_deref()).await?;
 
-    test_provider(ProviderSetupRequest {
-        name: req.name,
-        display_name: req.display_name,
-        api_base_url: req.api_base_url,
+    let config = ProviderConfig {
+        id: "fast-test".into(),
+        name: req.name.clone(),
+        display_name: req.display_name.clone(),
+        api_base_url: req.api_base_url.clone(),
         api_key,
-        model_name: req.model_name,
-    })
-    .await
+        model_name: req.model_name.clone(),
+        temperature: None,
+        max_tokens: None,
+    };
+    let provider = OpenAiCompatProvider::new(config);
+    let ctx = ClassifyContext {
+        user_message: "请帮我起草一份法律意见书".into(),
+        has_directory_ref: false,
+        has_file_ref: false,
+        directory_aliases: vec![],
+    };
+    let result = agent_classifier::classify_agent_mode(&provider, &ctx).await;
+    if result.source == "fallback" {
+        let detail = result
+            .diagnostic
+            .or(result.fallback_reason)
+            .unwrap_or_else(|| "分类测试未通过".into());
+        return Err(format!("快速模型分类测试失败：{}", detail));
+    }
+    Ok(format!("分类测试通过：{}", result.label))
 }
 
 #[tauri::command]

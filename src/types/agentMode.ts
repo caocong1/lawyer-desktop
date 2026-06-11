@@ -4,6 +4,9 @@ export interface ClassifyAgentModeResult {
   mode: AgentMode;
   label: string;
   reason: string;
+  source?: "llm" | "fallback";
+  fallback_reason?: string;
+  diagnostic?: string;
 }
 
 export function agentModeLabel(mode: AgentMode | "idle"): string {

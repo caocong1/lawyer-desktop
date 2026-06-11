@@ -1,17 +1,29 @@
-import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { open } from "@tauri-apps/plugin-dialog";
 import { SolidMarkdown } from "solid-markdown";
 import remarkGfm from "remark-gfm";
 import type { AgentMode } from "../../types/agentMode";
 import { agentModeLabel } from "../../types/agentMode";
 import { useConversation } from "../../stores/conversation";
+import type { Message } from "../../stores/conversation";
 import { useTrace } from "../../stores/trace";
 import { containsToolLeakage } from "../../utils/legalDocument";
 import type { ContextRefPayload } from "../../types/contextRefs";
 import { onChatStream, onWorkspaceIndexProgress } from "../../services/api";
-import type { ClarificationAnswer } from "../../types/workflow";
+import type { ClarificationAnswer, WorkflowState } from "../../types/workflow";
+import {
+  formatFullTime,
+  formatTimeDivider,
+  parseTimeMs,
+  shouldShowTimeDivider,
+} from "../../utils/chatTime";
+import { isVisibleChatMessage } from "../../utils/chatVisibility";
 import { Icon } from "../icons/Icons";
-import { WorkflowProgressSteps } from "./WorkflowProgressSteps";
+import {
+  ClarificationCard,
+  WorkflowNotice,
+  WorkflowSuggestions,
+} from "./WorkflowProgressSteps";
 import "./ChatPanel.css";
 
 function pathToAlias(path: string, kind: ContextRefPayload["kind"]): string {
@@ -55,6 +67,27 @@ function sessionTitle(
   return "新会话";
 }
 
+type ChatTimelineItem =
+  | { type: "time"; id: string; tsMs: number; label: string }
+  | { type: "message"; id: string; tsMs?: number; message: Message }
+  | { type: "workflow"; id: string; tsMs?: number; workflow: WorkflowState };
+
+function messageTimeMs(message: Message): number | undefined {
+  return parseTimeMs(message.created_at);
+}
+
+function workflowTimeMs(
+  workflow: WorkflowState | undefined,
+  fallback?: Message,
+): number | undefined {
+  const firstStepTime = workflow?.steps.find((step) => step.ts_ms)?.ts_ms;
+  return firstStepTime ?? (fallback ? messageTimeMs(fallback) : undefined);
+}
+
+function timeTitle(ms?: number): string | undefined {
+  return ms ? formatFullTime(ms) : undefined;
+}
+
 export function ChatPanel(props: ChatPanelProps) {
   const {
     messages,
@@ -89,10 +122,61 @@ export function ChatPanel(props: ChatPanelProps) {
   let attachRef: HTMLDivElement | undefined;
 
   const visibleMessages = () =>
-    messages().filter((m) => m.role === "user" || m.role === "assistant");
+    messages().filter((m) => isVisibleChatMessage(m));
+
+  const liveWorkflow = () => activeWorkflow();
+
+  const timelineItems = createMemo<ChatTimelineItem[]>(() => {
+    const rawItems: ChatTimelineItem[] = [];
+    const renderedWorkflowIds = new Set<string>();
+    for (const message of visibleMessages()) {
+      const workflow = message.role === "assistant" ? messageWorkflow(message.id) : undefined;
+      if (workflow && !renderedWorkflowIds.has(workflow.message_id)) {
+        renderedWorkflowIds.add(workflow.message_id);
+        rawItems.push({
+          type: "workflow",
+          id: `workflow-${workflow.message_id}`,
+          tsMs: workflowTimeMs(workflow, message),
+          workflow,
+        });
+      }
+      rawItems.push({
+        type: "message",
+        id: `message-${message.id}`,
+        tsMs: messageTimeMs(message),
+        message,
+      });
+    }
+
+    const live = liveWorkflow();
+    if (isStreaming() && live && !renderedWorkflowIds.has(live.message_id)) {
+      rawItems.push({
+        type: "workflow",
+        id: `workflow-live-${live.message_id}`,
+        tsMs: workflowTimeMs(live) ?? Date.now(),
+        workflow: live,
+      });
+    }
+
+    const withTime: ChatTimelineItem[] = [];
+    let previousTs: number | undefined;
+    for (const item of rawItems) {
+      if (shouldShowTimeDivider(previousTs, item.tsMs)) {
+        withTime.push({
+          type: "time",
+          id: `time-${item.id}`,
+          tsMs: item.tsMs as number,
+          label: formatTimeDivider(item.tsMs as number),
+        });
+      }
+      if (item.tsMs) previousTs = item.tsMs;
+      withTime.push(item);
+    }
+    return withTime;
+  });
 
   createEffect(() => {
-    visibleMessages();
+    timelineItems();
     isStreaming();
     streamingContent();
     const el = threadRef;
@@ -214,8 +298,6 @@ export function ChatPanel(props: ChatPanelProps) {
     isStreaming() &&
     (!streamingContent() || containsToolLeakage(streamingContent()));
 
-  const liveWorkflow = () => activeWorkflow();
-
   const liveWorkflowRunningLabel = () => {
     const steps = liveWorkflow()?.steps ?? [];
     const running = [...steps].reverse().find((step) => step.state === "run");
@@ -273,7 +355,7 @@ export function ChatPanel(props: ChatPanelProps) {
 
       <div class="thread scroll" ref={threadRef}>
         <Show
-          when={visibleMessages().length > 0 || isStreaming()}
+          when={timelineItems().length > 0 || isStreaming()}
           fallback={
             <div class="msg msg-agent">
               <div class="ava">墨</div>
@@ -284,61 +366,75 @@ export function ChatPanel(props: ChatPanelProps) {
             </div>
           }
         >
-          <For each={visibleMessages()}>
-            {(m) =>
-              m.role === "user" ? (
-                <div class="msg msg-user">
+          <For each={timelineItems()}>
+            {(item) => {
+              if (item.type === "time") {
+                return (
+                  <div class="time-divider" title={formatFullTime(item.tsMs)}>
+                    {item.label}
+                  </div>
+                );
+              }
+              if (item.type === "workflow") {
+                return (
+                  <WorkflowNotice
+                    workflow={() => item.workflow}
+                    timeTitle={timeTitle(item.tsMs)}
+                  />
+                );
+              }
+              const m = item.message;
+              return m.role === "user" ? (
+                <div class="msg msg-user" title={timeTitle(item.tsMs)}>
                   <div class="bubble-user">{m.content}</div>
                 </div>
               ) : (
-                <div class="msg msg-agent">
+                <div class="msg msg-agent" title={timeTitle(item.tsMs)}>
                   <div class="ava">墨</div>
                   <div class="agent-body">
                     <div class="agent-name">墨律 · 法律文书助理</div>
-                    <Show when={messageWorkflow(m.id)}>
-                      {(workflow) => (
-                        <WorkflowProgressSteps
-                          workflow={workflow}
-                          disabled={props.sending}
-                          onClarificationSubmit={answerClarification}
-                          onSuggestionClick={insertSuggestion}
-                        />
-                      )}
-                    </Show>
                     <Show when={messageDisplayContent(m).trim()}>
                       {(content) => <AssistantContent text={content()} />}
                     </Show>
+                    <Show when={messageWorkflow(m.id)}>
+                      {(workflow) => (
+                        <>
+                          <ClarificationCard
+                            workflow={workflow}
+                            disabled={props.sending}
+                            onClarificationSubmit={answerClarification}
+                          />
+                          <WorkflowSuggestions
+                            workflow={workflow}
+                            disabled={props.sending}
+                            onSuggestionClick={insertSuggestion}
+                          />
+                        </>
+                      )}
+                    </Show>
                   </div>
                 </div>
-              )
-            }
+              );
+            }}
           </For>
         </Show>
-        <Show when={isStreaming() && liveWorkflow()}>
-          {(workflow) => (
-            <div class="msg msg-agent">
-              <div class="ava">墨</div>
-              <div class="agent-body">
-                <div class="agent-name">墨律 · 法律文书助理</div>
-                <WorkflowProgressSteps
-                  workflow={workflow}
-                  disabled={props.sending}
-                  onClarificationSubmit={answerClarification}
-                  onSuggestionClick={insertSuggestion}
-                />
-                <Show
-                  when={
-                    !activeDraftResponse() &&
-                    !activeEvidenceResponse() &&
-                    streamingContent() &&
-                    !containsToolLeakage(streamingContent())
-                  }
-                >
-                  <AssistantContent text={streamingContent()} />
-                </Show>
-              </div>
+        <Show
+          when={
+            isStreaming() &&
+            liveWorkflow() &&
+            !activeDraftResponse() &&
+            !activeEvidenceResponse() &&
+            streamingContent() &&
+            !containsToolLeakage(streamingContent())
+          }
+        >
+          <div class="msg msg-agent" title={formatFullTime(Date.now())}>
+            <div class="ava">墨</div>
+            <div class="agent-body">
+              <div class="agent-name">墨律 · 法律文书助理</div>
+              <AssistantContent text={streamingContent()} />
             </div>
-          )}
+          </div>
         </Show>
         <Show when={isStreaming() && !liveWorkflow() && showEvidenceProgress()}>
           <div class="msg msg-agent">

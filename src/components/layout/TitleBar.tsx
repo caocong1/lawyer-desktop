@@ -10,6 +10,7 @@ import "./TitleBar.css";
 export interface TitleBarProps {
   screen: "home" | "workspace";
   onGoHome: () => void;
+  onOpenConversations: () => void;
   onOpenSettings: () => void;
 }
 
@@ -183,7 +184,7 @@ export function TitleBar(props: TitleBarProps) {
       >
         <Show
           when={props.screen === "workspace"}
-          fallback={<span class="muted">工作台</span>}
+          fallback={null}
         >
           <span class="muted">{conversationTitle()}</span>
           <span class="sep">/</span>
@@ -202,7 +203,12 @@ export function TitleBar(props: TitleBarProps) {
             )}
           </For>
         </div>
-        <button type="button" class="tb-ibtn" title="搜索">
+        <button
+          type="button"
+          class="tb-ibtn"
+          title="会话列表"
+          onClick={props.onOpenConversations}
+        >
           <Icon name="search" />
         </button>
         <button type="button" class="tb-ibtn" title="设置" onClick={props.onOpenSettings}>

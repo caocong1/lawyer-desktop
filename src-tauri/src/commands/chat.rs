@@ -142,6 +142,7 @@ pub struct SendMessageRequest {
     pub content: String,
     pub attachments: Option<Vec<FileAttachment>>,
     pub context_refs: Option<Vec<ContextRef>>,
+    pub ui_hidden: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -493,6 +494,9 @@ pub async fn send_message(
             "mode": classification.mode,
             "label": classification.label.clone(),
             "reason": classification.reason.clone(),
+            "source": classification.source.clone(),
+            "fallback_reason": classification.fallback_reason.clone(),
+            "diagnostic": classification.diagnostic.clone(),
             "duration_ms": classify_started.elapsed().as_millis() as u64,
         }),
     );
@@ -549,20 +553,36 @@ pub async fn send_message(
         .map(|a| serde_json::to_string(a).unwrap_or_else(|_| "[]".into()))
         .unwrap_or_else(|| "[]".into());
 
-    if let Err(e) = db::queries::save_message(
-        &db,
-        &conversation_id,
-        "user",
-        &user_content,
-        &attachments_json,
-        "[]",
-    )
-    .await
-    {
+    let ui_hidden = req.ui_hidden.unwrap_or(false);
+    let save_user_result = if ui_hidden {
+        let hidden_user_id = Uuid::new_v4().to_string();
+        let metadata = json!({ "content_hidden": true }).to_string();
+        db::queries::save_message_with_id_and_metadata(
+            &db,
+            &hidden_user_id,
+            &conversation_id,
+            "user",
+            &user_content,
+            &attachments_json,
+            "[]",
+            Some(&metadata),
+        )
+        .await
+    } else {
+        db::queries::save_message(
+            &db,
+            &conversation_id,
+            "user",
+            &user_content,
+            &attachments_json,
+            "[]",
+        )
+        .await
+    };
+
+    if let Err(e) = save_user_result {
         log::warn!("Failed to save user message: {}", e);
     }
-
-    maybe_auto_title(&db, &conversation_id, &user_content).await;
 
     let sandbox_guard = sandbox.read().await;
     let tool_ctx = ToolContext {
@@ -1062,6 +1082,8 @@ pub async fn send_message(
         }
     }
 
+    maybe_auto_title(&db, provider.as_ref(), &conversation_id).await;
+
     tracer.emit(
         "turn_end",
         json!({
@@ -1115,7 +1137,7 @@ async fn finish_ask_user_turn(
             "conversation_id": conversation_id,
             "status": "waiting",
             "steps": [
-                {"id": "clarify", "kind": "clarify", "label": "确认缺失信息", "state": "done"},
+                {"id": "clarify", "kind": "clarify", "label": "已列出待补充问题", "state": "done"},
                 {"id": "wait-user", "kind": "clarify", "label": "等待补充信息", "state": "run"}
             ],
             "clarification": {
@@ -1441,18 +1463,127 @@ async fn load_conversation_history(
     Ok(history)
 }
 
-async fn maybe_auto_title(pool: &Pool<Sqlite>, conversation_id: &str, user_content: &str) {
+fn message_is_hidden(msg: &db::models::Message) -> bool {
+    msg.metadata_json
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .and_then(|value| {
+            value
+                .get("content_hidden")
+                .and_then(|hidden| hidden.as_bool())
+        })
+        .unwrap_or(false)
+}
+
+fn clean_title(raw: &str) -> String {
+    let first_line = raw
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("")
+        .trim();
+    let mut title = first_line.to_string();
+    for prefix in ["会话标题：", "会话标题:", "标题：", "标题:"] {
+        if let Some(rest) = title.strip_prefix(prefix) {
+            title = rest.trim().to_string();
+            break;
+        }
+    }
+    let title = title
+        .trim_matches(|c: char| c.is_whitespace() || "\"'`“”《》【】[]（）()。；;，,".contains(c))
+        .to_string();
+    title
+        .chars()
+        .take(24)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+async fn maybe_auto_title(
+    pool: &Pool<Sqlite>,
+    provider: &dyn crate::llm::provider::LlmProvider,
+    conversation_id: &str,
+) {
     if let Ok(Some(conv)) = db::queries::get_conversation(pool, conversation_id).await {
-        if conv.title == "新会话" && !user_content.is_empty() {
-            let new_title = user_content
-                .chars()
-                .take(20)
-                .collect::<String>()
-                .trim()
-                .to_string();
-            if !new_title.is_empty() {
-                let _ =
-                    db::queries::update_conversation_title(pool, conversation_id, &new_title).await;
+        if conv.title != "新会话" {
+            return;
+        }
+
+        let rows = match db::queries::list_messages(pool, conversation_id).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                log::warn!("Failed to load messages for auto title: {}", e);
+                return;
+            }
+        };
+
+        let snippets = rows
+            .iter()
+            .filter(|msg| {
+                (msg.role == "user" || msg.role == "assistant") && !message_is_hidden(msg)
+            })
+            .take(8)
+            .map(|msg| {
+                let role = if msg.role == "user" {
+                    "用户"
+                } else {
+                    "助手"
+                };
+                let content = preview(&msg.content.replace('\n', " "), 260);
+                format!("{}：{}", role, content)
+            })
+            .collect::<Vec<_>>();
+
+        if snippets.is_empty() {
+            return;
+        }
+
+        let request = ChatRequest {
+            model: provider.model_name().to_string(),
+            messages: vec![
+                ChatMessage {
+                    reasoning_content: None,
+                    role: "system".into(),
+                    content: "你是法律 AI 桌面应用的会话标题生成器。请根据聊天内容归纳一个简洁中文标题，6 到 16 个汉字为宜，只输出标题，不要解释，不要加引号。".into(),
+                    name: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                ChatMessage {
+                    reasoning_content: None,
+                    role: "user".into(),
+                    content: format!("聊天内容：\n{}", snippets.join("\n")),
+                    name: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+            ],
+            tools: None,
+            temperature: Some(0.1),
+            max_tokens: Some(48),
+            stream: false,
+        };
+
+        let response = match provider.chat(&request).await {
+            Ok(response) => response,
+            Err(e) => {
+                log::warn!("Failed to generate conversation title: {}", e);
+                return;
+            }
+        };
+
+        let title = response
+            .choices
+            .first()
+            .and_then(|choice| choice.message.as_ref())
+            .map(|message| clean_title(&message.content))
+            .unwrap_or_default();
+
+        if !title.is_empty() {
+            if let Err(e) =
+                db::queries::update_conversation_title(pool, conversation_id, &title).await
+            {
+                log::warn!("Failed to update generated conversation title: {}", e);
             }
         }
     }
