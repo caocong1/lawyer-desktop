@@ -604,7 +604,7 @@ function TurnSection(props: { turn: () => TraceTurn; nowMs: () => number }) {
 
 export function AgentTracePanel() {
   const { turns, panelOpen, follow, setFollow, ingest, clear, toggle } = useTrace();
-  const { activeConversationId } = useConversation();
+  const { activeConversationId, ingestAgentTrace } = useConversation();
 
   const [nowMs, setNowMs] = createSignal(Date.now());
   let bodyRef: HTMLDivElement | undefined;
@@ -634,7 +634,10 @@ export function AgentTracePanel() {
   onMount(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
-    void onAgentTrace((e) => ingest(e)).then((u) => {
+    void onAgentTrace((e) => {
+      ingest(e);
+      ingestAgentTrace(e);
+    }).then((u) => {
       if (disposed) u();
       else unlisten = u;
     });

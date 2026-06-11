@@ -12,7 +12,6 @@ pub mod scanner;
 
 pub use index_store::ChunkDetail;
 pub use manager::{
-    bind_and_index, get_status, get_status_for_path, hash_root_path, list_files,
-    read_chunk, read_file_relative, search, set_app_data_dir, IndexProgress, IndexStats,
-    WorkspaceStatus,
+    bind_and_index, get_status, get_status_for_path, hash_root_path, list_files, read_chunk,
+    read_file_relative, search, set_app_data_dir, IndexProgress, IndexStats, WorkspaceStatus,
 };

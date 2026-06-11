@@ -5,6 +5,7 @@ import type { ContextRefPayload } from "../types/contextRefs";
 import type { ClassifyAgentModeResult } from "../types/agentMode";
 import type { ParseLegalDocumentResponse } from "../types/legal";
 import type { AgentTraceEvent } from "../types/trace";
+import type { MessageMetadata } from "../types/workflow";
 
 export type { ContextRefPayload };
 export type { ClassifyAgentModeResult };
@@ -101,6 +102,14 @@ export interface ParseLegalDocumentRequest {
   conversation_id?: string;
 }
 
+export interface GenerateFollowupPromptsRequest {
+  conversation_id: string;
+  message_id: string;
+  mode?: string;
+  user_prompt?: string;
+  summary?: string;
+}
+
 export interface LlmProvider {
   id: string;
   name: string;
@@ -140,6 +149,22 @@ export async function getConversations(): Promise<Conversation[]> {
 
 export async function getMessages(conversationId: string): Promise<Message[]> {
   return invoke("get_messages", { conversationId });
+}
+
+export async function updateMessageMetadata(
+  messageId: string,
+  metadata: MessageMetadata,
+): Promise<void> {
+  return invoke("update_message_metadata", {
+    messageId,
+    metadataJson: JSON.stringify(metadata),
+  });
+}
+
+export async function generateFollowupPrompts(
+  req: GenerateFollowupPromptsRequest,
+): Promise<string[]> {
+  return invoke("generate_followup_prompts", { req });
 }
 
 export async function deleteConversation(conversationId: string): Promise<void> {

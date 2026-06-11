@@ -71,13 +71,12 @@ impl<'a> IndexStore<'a> {
 
     pub async fn upsert_root(&self, root_path: &str, root_hash: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
-        let existing: Option<String> = sqlx::query_scalar(
-            "SELECT id FROM workspace_roots WHERE id = ?",
-        )
-        .bind(&self.root_id)
-        .fetch_optional(self.pool)
-        .await
-        .context("lookup workspace root")?;
+        let existing: Option<String> =
+            sqlx::query_scalar("SELECT id FROM workspace_roots WHERE id = ?")
+                .bind(&self.root_id)
+                .fetch_optional(self.pool)
+                .await
+                .context("lookup workspace root")?;
 
         if existing.is_some() {
             sqlx::query(
@@ -248,21 +247,19 @@ impl<'a> IndexStore<'a> {
     }
 
     pub async fn count_files_and_chunks(&self) -> Result<(i32, i32)> {
-        let file_count: i32 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM workspace_files WHERE root_id = ?",
-        )
-        .bind(&self.root_id)
-        .fetch_one(self.pool)
-        .await
-        .context("count files")?;
+        let file_count: i32 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM workspace_files WHERE root_id = ?")
+                .bind(&self.root_id)
+                .fetch_one(self.pool)
+                .await
+                .context("count files")?;
 
-        let chunk_count: i32 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM workspace_chunks WHERE root_id = ?",
-        )
-        .bind(&self.root_id)
-        .fetch_one(self.pool)
-        .await
-        .context("count chunks")?;
+        let chunk_count: i32 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM workspace_chunks WHERE root_id = ?")
+                .bind(&self.root_id)
+                .fetch_one(self.pool)
+                .await
+                .context("count chunks")?;
         Ok((file_count, chunk_count))
     }
 
@@ -476,10 +473,7 @@ mod tests {
         let root_id = "hash1";
         let pool = test_pool(root_id).await;
         let store = IndexStore::new(&pool, root_id);
-        store
-            .upsert_root("/tmp/case", root_id)
-            .await
-            .unwrap();
+        store.upsert_root("/tmp/case", root_id).await.unwrap();
 
         let temp = std::env::temp_dir().join(format!("lawyer-ws-data-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&temp).unwrap();
@@ -562,7 +556,10 @@ mod tests {
         let content = "# 备忘录\n重庆市双业融资担保有限公司出具投标保函，受益人为国航重庆分公司。";
         let scanned = make_scanned(&temp, "备忘录.md", content);
         let chunks = chunk_markdown(&scanned.relative_path, content);
-        store.upsert_file_and_chunks(&scanned, &chunks).await.unwrap();
+        store
+            .upsert_file_and_chunks(&scanned, &chunks)
+            .await
+            .unwrap();
 
         // Model-style multi-keyword query: no chunk contains this as one phrase.
         let hits = store

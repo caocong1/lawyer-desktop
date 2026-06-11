@@ -15,6 +15,7 @@ export type TraceKind =
   | "thinking_delta"
   | "tool_call"
   | "tool_result"
+  | "ask_user"
   | "skill_activated"
   | "leak_retry"
   | "leak_fallback"

@@ -104,7 +104,11 @@ impl McpClient {
         }
     }
 
-    pub async fn call_tool(&self, name: &str, arguments: serde_json::Value) -> Result<McpToolResult> {
+    pub async fn call_tool(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<McpToolResult> {
         let result = self
             .send_request(
                 "tools/call",

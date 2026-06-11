@@ -11,6 +11,7 @@ const KNOWN_TOOLS: &[&str] = &[
     "read_user_file",
     "generate_docx",
     "select_skill",
+    "ask_user",
 ];
 
 /// Map fullwidth / token-separator characters (DeepSeek DSML uses U+FF5C `｜`
@@ -100,7 +101,11 @@ fn find_case_insensitive(hay: &str, needle: &str) -> Option<usize> {
 }
 
 fn normalize_tool_name(raw: &str) -> String {
-    let n = raw.trim().trim_matches('"').trim_matches('\'').to_lowercase();
+    let n = raw
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .to_lowercase();
     if KNOWN_TOOLS.iter().any(|t| *t == n) {
         return n;
     }
@@ -178,7 +183,17 @@ fn parse_invoke_block(block: &str) -> Option<(String, Value)> {
     let tool_name = normalize_tool_name(&raw_name);
 
     let mut args = serde_json::Map::new();
-    for key in ["query", "k", "chunk_id", "relative_path", "max_chars", "pattern", "path", "skill_name", "reason"] {
+    for key in [
+        "query",
+        "k",
+        "chunk_id",
+        "relative_path",
+        "max_chars",
+        "pattern",
+        "path",
+        "skill_name",
+        "reason",
+    ] {
         if let Some(v) = parse_parameter_value(block, key) {
             if key == "k" || key == "max_chars" {
                 if let Ok(n) = v.parse::<i64>() {

@@ -13,8 +13,9 @@ const RESEARCH_GATE_FALLBACK: &str = r#"## research-gate（强制前置）
 "#;
 
 pub fn build_skill_descriptions(skills: &[SkillMetadata]) -> String {
-    let mut desc =
-        String::from("## 可用法律技能\n\n以下是你可以使用的法律技能。根据用户需求自动匹配最合适的技能：\n\n");
+    let mut desc = String::from(
+        "## 可用法律技能\n\n以下是你可以使用的法律技能。根据用户需求自动匹配最合适的技能：\n\n",
+    );
 
     for skill in skills {
         if skill.name == "research-gate" {
@@ -49,7 +50,8 @@ pub fn build_system_prompt(
             ## 文书输出格式（起草时强制）\n\
             1. 最终回复只输出完整法律文书正文，禁止输出工具调用语法（如 tool_calls、invoke、DSML、XML 标签）或「第一步/第二步」过程说明\n\
             2. 工具必须通过 API 工具接口调用，不得在正文里伪造工具调用\n\
-            3. 优先输出 JSON（含 title、sections）；若用 Markdown，须含文书标题、当事人信息与条款正文\n\n",
+            3. 正式起草前先判断是否缺少必要事实；若缺少会影响文书质量，调用 ask_user 一次提出 2-4 个必要问题；若信息足够，不要提问，直接起草\n\
+            4. 优先输出 JSON（含 title、sections）；若用 Markdown，须含文书标题、当事人信息与条款正文\n\n",
         )
     };
 
@@ -78,7 +80,7 @@ fn build_evidence_system_prompt() -> String {
         1. **禁止臆测**：所有事实与结论必须来自 workspace 工具检索到的 chunk 或文件\n\
         2. **禁止**将整目录内容拼进回复；必须通过 `search_workspace` → `read_chunk` / `read_file` 逐条取证\n\
         3. 关键结论必须标注来源：`relative_path` 与/或 `chunk_id`\n\
-        4. 信息不足时标注「不足以判断」，不得编造\n\n\
+        4. 信息不足时优先调用 ask_user 提出必要澄清；无法补足时标注「不足以判断」，不得编造\n\n\
         ## 三阶段工作流\n\
         1. **Plan**：先输出文档大纲（Markdown 标题），每节列出拟用的 `search_queries`\n\
         2. **Evidence**：逐节调用 `search_workspace` 收集事实，必要时 `read_chunk` / `read_file` 补全\n\
@@ -219,6 +221,49 @@ pub fn build_builtin_tool_definitions(include_workspace: bool) -> Vec<ToolDefini
                         "reason": { "type": "string", "description": "选择此技能的原因" }
                     },
                     "required": ["skill_name"]
+                }),
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".into(),
+            function: FunctionDefinition {
+                name: "ask_user".into(),
+                description: "当正式起草或分析前缺少关键事实时，向用户提出 2-4 个必要澄清问题；每题给出可点击选项，并允许用户自由输入。调用后本轮会暂停等待用户回答。".into(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "intro": {
+                            "type": "string",
+                            "description": "给用户的一句简短说明，说明为什么需要补充信息"
+                        },
+                        "questions": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 4,
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": { "type": "string", "description": "稳定问题 id，如 q1" },
+                                    "question": { "type": "string", "description": "必要问题，中文一句话" },
+                                    "options": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "label": { "type": "string", "description": "选项显示文案" },
+                                                "value": { "type": "string", "description": "提交给模型的答案值" },
+                                                "description": { "type": "string", "description": "可选，补充说明" }
+                                            },
+                                            "required": ["label"]
+                                        }
+                                    },
+                                    "allow_free_text": { "type": "boolean", "description": "是否允许自由输入，默认 true" }
+                                },
+                                "required": ["question", "options"]
+                            }
+                        }
+                    },
+                    "required": ["questions"]
                 }),
             },
         },

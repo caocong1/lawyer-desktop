@@ -39,10 +39,7 @@ pub async fn get_conversation(
     row.as_ref().map(row_to_conversation).transpose()
 }
 
-pub async fn create_conversation(
-    pool: &Pool<Sqlite>,
-    title: &str,
-) -> anyhow::Result<Conversation> {
+pub async fn create_conversation(pool: &Pool<Sqlite>, title: &str) -> anyhow::Result<Conversation> {
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
 
@@ -105,7 +102,7 @@ pub async fn list_messages(
     conversation_id: &str,
 ) -> anyhow::Result<Vec<Message>> {
     let rows = sqlx::query(
-        "SELECT id, conversation_id, role, content, attachments_json, tool_calls_json, created_at \
+        "SELECT id, conversation_id, role, content, attachments_json, tool_calls_json, metadata_json, created_at \
          FROM messages WHERE conversation_id = ? ORDER BY created_at ASC",
     )
     .bind(conversation_id)
@@ -125,18 +122,42 @@ pub async fn save_message(
     tool_calls: &str,
 ) -> anyhow::Result<Message> {
     let id = Uuid::new_v4().to_string();
+    save_message_with_id_and_metadata(
+        pool,
+        &id,
+        conversation_id,
+        role,
+        content,
+        attachments,
+        tool_calls,
+        None,
+    )
+    .await
+}
+
+pub async fn save_message_with_id_and_metadata(
+    pool: &Pool<Sqlite>,
+    id: &str,
+    conversation_id: &str,
+    role: &str,
+    content: &str,
+    attachments: &str,
+    tool_calls: &str,
+    metadata: Option<&str>,
+) -> anyhow::Result<Message> {
     let now = Utc::now().to_rfc3339();
 
     sqlx::query(
-        "INSERT INTO messages (id, conversation_id, role, content, attachments_json, tool_calls_json, created_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO messages (id, conversation_id, role, content, attachments_json, tool_calls_json, metadata_json, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(&id)
+    .bind(id)
     .bind(conversation_id)
     .bind(role)
     .bind(content)
     .bind(attachments)
     .bind(tool_calls)
+    .bind(metadata)
     .bind(&now)
     .execute(pool)
     .await
@@ -150,7 +171,7 @@ pub async fn save_message(
         .await;
 
     Ok(Message {
-        id,
+        id: id.to_string(),
         conversation_id: conversation_id.to_string(),
         role: role.to_string(),
         content: content.to_string(),
@@ -164,8 +185,43 @@ pub async fn save_message(
         } else {
             Some(tool_calls.to_string())
         },
+        metadata_json: metadata.map(|m| m.to_string()),
         created_at: now,
     })
+}
+
+pub async fn update_message_metadata(
+    pool: &Pool<Sqlite>,
+    message_id: &str,
+    metadata_json: &str,
+) -> anyhow::Result<()> {
+    let changed = sqlx::query("UPDATE messages SET metadata_json = ? WHERE id = ?")
+        .bind(metadata_json)
+        .bind(message_id)
+        .execute(pool)
+        .await
+        .context("failed to update message metadata")?
+        .rows_affected();
+    anyhow::ensure!(changed > 0, "message not found");
+    Ok(())
+}
+
+pub async fn ensure_message_metadata_schema(pool: &Pool<Sqlite>) -> anyhow::Result<()> {
+    let rows = sqlx::query("PRAGMA table_info(messages)")
+        .fetch_all(pool)
+        .await
+        .context("failed to inspect messages schema")?;
+    let has_metadata = rows.iter().any(|row| {
+        let name: String = row.get("name");
+        name == "metadata_json"
+    });
+    if !has_metadata {
+        sqlx::query("ALTER TABLE messages ADD COLUMN metadata_json TEXT")
+            .execute(pool)
+            .await
+            .context("failed to add messages.metadata_json")?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -206,10 +262,7 @@ pub async fn save_document(
     })
 }
 
-pub async fn get_document(
-    pool: &Pool<Sqlite>,
-    id: &str,
-) -> anyhow::Result<Option<LegalDocument>> {
+pub async fn get_document(pool: &Pool<Sqlite>, id: &str) -> anyhow::Result<Option<LegalDocument>> {
     let row = sqlx::query(
         "SELECT id, conversation_id, title, document_json, version, created_at, updated_at \
          FROM documents WHERE id = ?",
@@ -323,32 +376,22 @@ pub async fn set_setting(pool: &Pool<Sqlite>, key: &str, value: &str) -> anyhow:
     Ok(())
 }
 
-pub async fn get_active_conversation_id(
-    pool: &Pool<Sqlite>,
-) -> anyhow::Result<Option<String>> {
+pub async fn get_active_conversation_id(pool: &Pool<Sqlite>) -> anyhow::Result<Option<String>> {
     get_setting(pool, "active_conversation_id").await
 }
 
-pub async fn set_active_conversation_id(
-    pool: &Pool<Sqlite>,
-    id: &str,
-) -> anyhow::Result<()> {
+pub async fn set_active_conversation_id(pool: &Pool<Sqlite>, id: &str) -> anyhow::Result<()> {
     set_setting(pool, "active_conversation_id", id).await
 }
 
 pub async fn get_allowed_file_dirs(pool: &Pool<Sqlite>) -> anyhow::Result<Vec<String>> {
     match get_setting(pool, "allowed_file_dirs").await? {
-        Some(json) => {
-            serde_json::from_str(&json).context("failed to parse allowed_file_dirs")
-        }
+        Some(json) => serde_json::from_str(&json).context("failed to parse allowed_file_dirs"),
         None => Ok(Vec::new()),
     }
 }
 
-pub async fn set_allowed_file_dirs(
-    pool: &Pool<Sqlite>,
-    dirs: &[String],
-) -> anyhow::Result<()> {
+pub async fn set_allowed_file_dirs(pool: &Pool<Sqlite>, dirs: &[String]) -> anyhow::Result<()> {
     let json = serde_json::to_string(dirs).context("failed to serialize allowed_file_dirs")?;
     set_setting(pool, "allowed_file_dirs", &json).await
 }
@@ -423,7 +466,9 @@ pub async fn clear_fast_provider_config(pool: &Pool<Sqlite>) -> anyhow::Result<(
     Ok(())
 }
 
-pub async fn get_fast_provider_meta(pool: &Pool<Sqlite>) -> anyhow::Result<Option<FastProviderMeta>> {
+pub async fn get_fast_provider_meta(
+    pool: &Pool<Sqlite>,
+) -> anyhow::Result<Option<FastProviderMeta>> {
     match get_setting(pool, FAST_PROVIDER_META_KEY).await? {
         Some(v) => Ok(Some(serde_json::from_str(&v)?)),
         None => Ok(None),
@@ -431,9 +476,7 @@ pub async fn get_fast_provider_meta(pool: &Pool<Sqlite>) -> anyhow::Result<Optio
 }
 
 pub async fn fast_provider_has_api_key(pool: &Pool<Sqlite>) -> anyhow::Result<bool> {
-    Ok(get_setting(pool, FAST_PROVIDER_API_KEY)
-        .await?
-        .is_some())
+    Ok(get_setting(pool, FAST_PROVIDER_API_KEY).await?.is_some())
 }
 
 // ---------------------------------------------------------------------------
@@ -458,6 +501,7 @@ fn row_to_message(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<Message> {
         content: row.get("content"),
         attachments_json: row.get("attachments_json"),
         tool_calls_json: row.get("tool_calls_json"),
+        metadata_json: row.get("metadata_json"),
         created_at: row.get("created_at"),
     })
 }

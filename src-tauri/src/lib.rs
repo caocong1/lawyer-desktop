@@ -14,8 +14,8 @@ use security::key_store::KeyStore;
 use skills::SkillRegistry;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tauri::Manager;
+use tokio::sync::RwLock;
 
 /// Resolve default skills root: `vendor/ai-for-china-legal` or sibling `../ai-for-china-legal`.
 fn resolve_default_skills_root(project_root: &Path) -> Option<PathBuf> {
@@ -167,6 +167,10 @@ pub fn run() {
                             let _ = tx.send(Err(format!("db migration failed: {}", e)));
                             return;
                         }
+                        if let Err(e) = db::queries::ensure_message_metadata_schema(&pool).await {
+                            let _ = tx.send(Err(format!("db metadata migration failed: {}", e)));
+                            return;
+                        }
                         handle.manage(pool);
                         let _ = tx.send(Ok(()));
                     }
@@ -196,7 +200,9 @@ pub fn run() {
 
             // Path sandbox
             let extra_dirs = tauri::async_runtime::block_on(async {
-                db::queries::get_allowed_file_dirs(&pool).await.unwrap_or_default()
+                db::queries::get_allowed_file_dirs(&pool)
+                    .await
+                    .unwrap_or_default()
             });
             let sandbox = Arc::new(RwLock::new(
                 commands::files::build_sandbox(&extra_dirs)
@@ -228,9 +234,9 @@ pub fn run() {
                 });
             }
 
-            if let Ok(Some(fast_config)) =
-                tauri::async_runtime::block_on(db::queries::get_fast_provider_config(&pool, &key_store))
-            {
+            if let Ok(Some(fast_config)) = tauri::async_runtime::block_on(
+                db::queries::get_fast_provider_config(&pool, &key_store),
+            ) {
                 let engine = app.state::<LlmEngine>().inner();
                 tauri::async_runtime::block_on(async {
                     if let Err(e) = engine.set_fast_provider(Some(fast_config)).await {
@@ -300,6 +306,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::chat::send_message,
             commands::chat::classify_agent_mode,
+            commands::chat::update_message_metadata,
+            commands::chat::generate_followup_prompts,
             commands::chat::create_conversation,
             commands::chat::get_conversations,
             commands::chat::get_messages,

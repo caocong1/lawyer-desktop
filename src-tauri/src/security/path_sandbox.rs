@@ -45,12 +45,16 @@ impl PathSandbox {
     pub fn validate(&self, path: &str) -> Result<PathBuf> {
         let input = Path::new(path);
 
-        if input.components().any(|c| matches!(c, Component::ParentDir)) {
+        if input
+            .components()
+            .any(|c| matches!(c, Component::ParentDir))
+        {
             bail!("path traversal not allowed: {}", path);
         }
 
         let canonical = if input.is_absolute() {
-            std::fs::canonicalize(input).with_context(|| format!("cannot resolve path: {}", path))?
+            std::fs::canonicalize(input)
+                .with_context(|| format!("cannot resolve path: {}", path))?
         } else {
             let joined = std::env::current_dir()
                 .context("cannot get current directory")?

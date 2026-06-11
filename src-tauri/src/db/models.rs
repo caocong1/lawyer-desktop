@@ -17,6 +17,7 @@ pub struct Message {
     pub content: String,
     pub attachments_json: Option<String>,
     pub tool_calls_json: Option<String>,
+    pub metadata_json: Option<String>,
     pub created_at: String,
 }
 

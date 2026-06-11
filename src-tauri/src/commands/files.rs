@@ -129,9 +129,7 @@ fn scan_dir_recursive<'a>(
     recursive: bool,
 ) -> BoxFuture<'a, Result<(), String>> {
     Box::pin(async move {
-        let mut entries = tokio::fs::read_dir(dir)
-            .await
-            .map_err(|e| e.to_string())?;
+        let mut entries = tokio::fs::read_dir(dir).await.map_err(|e| e.to_string())?;
 
         while let Some(entry) = entries.next_entry().await.map_err(|e| e.to_string())? {
             let metadata = entry.metadata().await.map_err(|e| e.to_string())?;
@@ -217,9 +215,7 @@ pub fn build_sandbox(extra_dirs: &[String]) -> Result<PathSandbox, String> {
     PathSandbox::with_defaults(extra_dirs).map_err(|e| e.to_string())
 }
 
-pub async fn build_sandbox_from_db(
-    pool: &sqlx::Pool<sqlx::Sqlite>,
-) -> Result<PathSandbox, String> {
+pub async fn build_sandbox_from_db(pool: &sqlx::Pool<sqlx::Sqlite>) -> Result<PathSandbox, String> {
     let extra = crate::db::queries::get_allowed_file_dirs(pool)
         .await
         .map_err(|e| e.to_string())?;

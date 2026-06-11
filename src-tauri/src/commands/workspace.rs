@@ -158,9 +158,7 @@ pub async fn bind_workspace(
 
 #[tauri::command]
 pub async fn get_workspace_index_status(path: String) -> Result<Option<WorkspaceStatus>, String> {
-    get_status_for_path(&path)
-        .await
-        .map_err(|e| e.to_string())
+    get_status_for_path(&path).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -190,11 +188,7 @@ pub async fn search_workspace(
 }
 
 /// Start indexing in background (used from chat when directory ref is attached).
-pub fn spawn_bind_and_index(
-    app: &AppHandle,
-    root_path: String,
-    conversation_id: Option<String>,
-) {
+pub fn spawn_bind_and_index(app: &AppHandle, root_path: String, conversation_id: Option<String>) {
     let app_handle = app.clone();
     let root_id = hash_root_path(&root_path);
     let conv_id = conversation_id;

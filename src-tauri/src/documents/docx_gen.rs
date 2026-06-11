@@ -15,7 +15,9 @@ pub fn generate_docx(title: &str, content_markdown: &str, output_path: &Path) ->
     doc = doc.add_paragraph(
         Paragraph::new().add_run(
             Run::new()
-                .add_text("【声明：本文件为 AI 辅助生成的草稿，仅供律师审查参考，不构成法律建议。】")
+                .add_text(
+                    "【声明：本文件为 AI 辅助生成的草稿，仅供律师审查参考，不构成法律建议。】",
+                )
                 .size(18)
                 .color("888888"),
         ),
@@ -51,8 +53,7 @@ pub fn generate_docx(title: &str, content_markdown: &str, output_path: &Path) ->
         } else if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
             let text = &trimmed[2..];
             doc = doc.add_paragraph(
-                Paragraph::new()
-                    .add_run(Run::new().add_text(&format!("• {}", text))),
+                Paragraph::new().add_run(Run::new().add_text(&format!("• {}", text))),
             );
         } else {
             let clean = trimmed.replace("**", "").replace('*', "").replace('_', "");

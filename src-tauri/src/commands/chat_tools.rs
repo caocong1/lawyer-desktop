@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{Pool, Sqlite};
 use tauri::{AppHandle, Emitter};
@@ -25,6 +26,28 @@ use crate::llm::tool_leak::{contains_tool_leakage, sanitize_assistant_content};
 use serde_json::json;
 
 pub const MAX_TOOL_ROUNDS: usize = 10;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AskUserOption {
+    pub label: String,
+    pub value: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AskUserQuestion {
+    pub id: Option<String>,
+    pub question: String,
+    pub options: Vec<AskUserOption>,
+    pub allow_free_text: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AskUserRequest {
+    pub id: Option<String>,
+    pub intro: Option<String>,
+    pub questions: Vec<AskUserQuestion>,
+}
 
 pub struct ToolContext<'a> {
     pub app: &'a AppHandle,
@@ -70,6 +93,35 @@ pub async fn build_all_tools(mcp: &McpManager, include_workspace: bool) -> Vec<T
     tools
 }
 
+pub fn parse_ask_user_args(args: &Value) -> Result<AskUserRequest, String> {
+    let mut req: AskUserRequest = serde_json::from_value(args.clone())
+        .map_err(|e| format!("Invalid ask_user args: {}", e))?;
+    req.questions.retain(|q| !q.question.trim().is_empty());
+    if req.questions.is_empty() {
+        return Err("ask_user requires at least one question".into());
+    }
+    req.questions.truncate(4);
+    for (idx, q) in req.questions.iter_mut().enumerate() {
+        if q.id.as_deref().unwrap_or("").trim().is_empty() {
+            q.id = Some(format!("q{}", idx + 1));
+        }
+        q.options.retain(|o| !o.label.trim().is_empty());
+        for opt in &mut q.options {
+            if opt.value.as_deref().unwrap_or("").trim().is_empty() {
+                opt.value = Some(opt.label.clone());
+            }
+        }
+        if q.options.is_empty() {
+            q.options.push(AskUserOption {
+                label: "由我补充".into(),
+                value: Some("由我补充".into()),
+                description: None,
+            });
+        }
+    }
+    Ok(req)
+}
+
 pub async fn execute_tool(
     ctx: &ToolContext<'_>,
     tool_call: &ToolCall,
@@ -109,6 +161,10 @@ pub async fn execute_tool(
                     skill_name
                 ))
             }
+        }
+        "ask_user" => {
+            let _ = parse_ask_user_args(&args)?;
+            Ok("已向用户提出澄清问题，等待用户回答后继续。".into())
         }
         "read_user_file" => {
             let path = args

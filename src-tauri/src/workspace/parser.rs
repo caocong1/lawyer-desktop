@@ -10,7 +10,8 @@ pub struct ParsedDocument {
 }
 
 fn read_text_with_encoding(path: &Path) -> Result<String> {
-    let bytes = std::fs::read(path).with_context(|| format!("read text file: {}", path.display()))?;
+    let bytes =
+        std::fs::read(path).with_context(|| format!("read text file: {}", path.display()))?;
 
     if let Ok(s) = std::str::from_utf8(&bytes) {
         return Ok(s.to_string());
@@ -101,7 +102,9 @@ fn docx_table_text(table: &docx_rs::Table, out: &mut String) {
             let mut cell_text = String::new();
             for content in &cell.children {
                 match content {
-                    docx_rs::TableCellContent::Paragraph(p) => docx_paragraph_text(p, &mut cell_text),
+                    docx_rs::TableCellContent::Paragraph(p) => {
+                        docx_paragraph_text(p, &mut cell_text)
+                    }
                     docx_rs::TableCellContent::Table(t) => docx_table_text(t, &mut cell_text),
                     _ => {}
                 }
@@ -226,7 +229,11 @@ mod tests {
             .unwrap();
 
         let doc = parse_file(&path, "docx").unwrap();
-        assert!(doc.markdown.contains("关于投标保函的诉讼请示"), "got: {}", doc.markdown);
+        assert!(
+            doc.markdown.contains("关于投标保函的诉讼请示"),
+            "got: {}",
+            doc.markdown
+        );
         assert!(doc.markdown.contains("索赔金额为人民币500,000元。"));
         assert!(doc.markdown.contains("被告 | 重庆市双业融资担保有限公司"));
         let _ = fs::remove_dir_all(&dir);

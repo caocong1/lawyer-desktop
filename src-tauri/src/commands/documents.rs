@@ -52,13 +52,9 @@ pub async fn generate_docx(
         "template": req.template,
         "output_path": validated.to_string_lossy(),
     })) {
-        let _ = db::queries::save_document(
-            &db,
-            req.conversation_id.as_deref(),
-            &req.title,
-            &doc_json,
-        )
-        .await;
+        let _ =
+            db::queries::save_document(&db, req.conversation_id.as_deref(), &req.title, &doc_json)
+                .await;
     }
 
     Ok(validated.to_string_lossy().to_string())
@@ -69,8 +65,8 @@ pub async fn parse_legal_document(
     req: ParseLegalDocumentRequest,
     db: State<'_, Pool<Sqlite>>,
 ) -> Result<ParseLegalDocumentResponse, String> {
-    let document = types::parse_legal_document_json(&req.json_content)
-        .map_err(|e| e.to_string())?;
+    let document =
+        types::parse_legal_document_json(&req.json_content).map_err(|e| e.to_string())?;
 
     let markdown = document.to_markdown();
     let doc_json = serde_json::to_string(&document).map_err(|e| e.to_string())?;

@@ -6,11 +6,12 @@ import type { AgentMode } from "../../types/agentMode";
 import { agentModeLabel } from "../../types/agentMode";
 import { useConversation } from "../../stores/conversation";
 import { useTrace } from "../../stores/trace";
-import { containsToolLeakage, sanitizeLlmDocumentContent } from "../../utils/legalDocument";
+import { containsToolLeakage } from "../../utils/legalDocument";
 import type { ContextRefPayload } from "../../types/contextRefs";
 import { onChatStream, onWorkspaceIndexProgress } from "../../services/api";
+import type { ClarificationAnswer } from "../../types/workflow";
 import { Icon } from "../icons/Icons";
-import { DraftingProgressSteps } from "./DraftingProgressSteps";
+import { WorkflowProgressSteps } from "./WorkflowProgressSteps";
 import "./ChatPanel.css";
 
 function pathToAlias(path: string, kind: ContextRefPayload["kind"]): string {
@@ -63,13 +64,16 @@ export function ChatPanel(props: ChatPanelProps) {
     isStreaming,
     streamingContent,
     streamPhase,
-    draftWorkflowActive,
+    activeDraftResponse,
     activeEvidenceResponse,
-    legalDocument,
     appendStreamChunk,
     finishStreaming,
     setStreamStatus,
     activeConversationId,
+    messageDisplayContent,
+    messageWorkflow,
+    activeWorkflow,
+    submitClarificationAnswers,
     pendingContextRefs,
     addContextRef,
     removeContextRef,
@@ -200,31 +204,47 @@ export function ChatPanel(props: ChatPanelProps) {
     if (phase === "tool") return "正在检索案卷与法规…";
     if (phase === "streaming") return "正在生成内容…";
     if (phase === "thinking") return "正在分析需求并规划结构…";
+    if (phase === "clarifying") return "正在确认补充信息…";
     if (phase === "error") return "请求出错";
     return "正在连接模型…";
   };
-
-  const showDraftProgress = () =>
-    draftWorkflowActive() && legalDocument() === null && !activeEvidenceResponse();
 
   const showEvidenceProgress = () =>
     activeEvidenceResponse() &&
     isStreaming() &&
     (!streamingContent() || containsToolLeakage(streamingContent()));
 
-  const evidenceStreamText = () => {
-    const raw = streamingContent();
-    if (!raw || containsToolLeakage(raw)) return "";
-    return sanitizeLlmDocumentContent(raw);
+  const liveWorkflow = () => activeWorkflow();
+
+  const liveWorkflowRunningLabel = () => {
+    const steps = liveWorkflow()?.steps ?? [];
+    const running = [...steps].reverse().find((step) => step.state === "run");
+    return running?.label;
   };
 
   const statusLine = () => {
-    if (!isStreaming() && !showDraftProgress()) return `${visibleMessages().length} 条消息`;
-    if (showDraftProgress()) return phaseLabel();
+    if (!isStreaming()) return `${visibleMessages().length} 条消息`;
+    if (liveWorkflowRunningLabel()) return `${liveWorkflowRunningLabel()}…`;
     if (showEvidenceProgress()) return phaseLabel();
     if (streamingContent()) return "正在生成回复…";
     return phaseLabel();
   };
+
+  function insertSuggestion(prompt: string) {
+    setText(prompt);
+    requestAnimationFrame(() => {
+      if (!taRef) return;
+      taRef.focus();
+      taRef.style.height = "auto";
+      taRef.style.height = `${Math.min(taRef.scrollHeight, 120)}px`;
+    });
+  }
+
+  function answerClarification(messageId: string, answers: ClarificationAnswer[]) {
+    void submitClarificationAnswers(messageId, answers).catch((e) => {
+      console.error("提交澄清答案失败:", e);
+    });
+  }
 
   return (
     <div class="chat" style={{ "--chat-w": "500px" }}>
@@ -237,9 +257,9 @@ export function ChatPanel(props: ChatPanelProps) {
           <div class="cs">{statusLine()}</div>
         </div>
         <span class="grow" />
-        <div class={`stage-pill${isStreaming() || showDraftProgress() || showEvidenceProgress() ? " live" : ""}`}>
+        <div class={`stage-pill${isStreaming() || showEvidenceProgress() ? " live" : ""}`}>
           <span class="d" />
-          {showDraftProgress() || showEvidenceProgress() ? "生成中" : isStreaming() ? "回复中" : "已就绪"}
+          {showEvidenceProgress() ? "生成中" : isStreaming() ? "回复中" : "已就绪"}
         </div>
         <button
           type="button"
@@ -275,23 +295,52 @@ export function ChatPanel(props: ChatPanelProps) {
                   <div class="ava">墨</div>
                   <div class="agent-body">
                     <div class="agent-name">墨律 · 法律文书助理</div>
-                    <AssistantContent text={m.content} />
+                    <Show when={messageWorkflow(m.id)}>
+                      {(workflow) => (
+                        <WorkflowProgressSteps
+                          workflow={workflow}
+                          disabled={props.sending}
+                          onClarificationSubmit={answerClarification}
+                          onSuggestionClick={insertSuggestion}
+                        />
+                      )}
+                    </Show>
+                    <Show when={messageDisplayContent(m).trim()}>
+                      {(content) => <AssistantContent text={content()} />}
+                    </Show>
                   </div>
                 </div>
               )
             }
           </For>
         </Show>
-        <Show when={showDraftProgress()}>
-          <div class="msg msg-agent">
-            <div class="ava">墨</div>
-            <div class="agent-body">
-              <div class="agent-name">墨律 · 法律文书助理</div>
-              <DraftingProgressSteps phase={streamPhase} />
+        <Show when={isStreaming() && liveWorkflow()}>
+          {(workflow) => (
+            <div class="msg msg-agent">
+              <div class="ava">墨</div>
+              <div class="agent-body">
+                <div class="agent-name">墨律 · 法律文书助理</div>
+                <WorkflowProgressSteps
+                  workflow={workflow}
+                  disabled={props.sending}
+                  onClarificationSubmit={answerClarification}
+                  onSuggestionClick={insertSuggestion}
+                />
+                <Show
+                  when={
+                    !activeDraftResponse() &&
+                    !activeEvidenceResponse() &&
+                    streamingContent() &&
+                    !containsToolLeakage(streamingContent())
+                  }
+                >
+                  <AssistantContent text={streamingContent()} />
+                </Show>
+              </div>
             </div>
-          </div>
+          )}
         </Show>
-        <Show when={showEvidenceProgress()}>
+        <Show when={isStreaming() && !liveWorkflow() && showEvidenceProgress()}>
           <div class="msg msg-agent">
             <div class="ava">墨</div>
             <div class="agent-body">
@@ -303,7 +352,7 @@ export function ChatPanel(props: ChatPanelProps) {
             </div>
           </div>
         </Show>
-        <Show when={isStreaming() && !showDraftProgress() && !showEvidenceProgress() && !streamingContent()}>
+        <Show when={isStreaming() && !liveWorkflow() && !showEvidenceProgress() && !streamingContent()}>
           <div class="msg msg-agent">
             <div class="ava">墨</div>
             <div class="agent-body">
@@ -315,16 +364,21 @@ export function ChatPanel(props: ChatPanelProps) {
             </div>
           </div>
         </Show>
-        <Show when={isStreaming() && !showDraftProgress() && !showEvidenceProgress() && streamingContent()}>
+        <Show
+          when={
+            isStreaming() &&
+            !liveWorkflow() &&
+            !showEvidenceProgress() &&
+            !activeDraftResponse() &&
+            !activeEvidenceResponse() &&
+            streamingContent()
+          }
+        >
           <div class="msg msg-agent">
             <div class="ava">墨</div>
             <div class="agent-body">
               <div class="agent-name">墨律 · 法律文书助理</div>
-              <AssistantContent
-                text={
-                  activeEvidenceResponse() ? evidenceStreamText() : streamingContent()
-                }
-              />
+              <AssistantContent text={streamingContent()} />
             </div>
           </div>
         </Show>

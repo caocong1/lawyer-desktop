@@ -62,7 +62,8 @@ fn is_allowed_ext(ext: &str) -> bool {
 
 /// Compute SHA-256 hex digest of file contents.
 pub fn hash_file(path: &Path) -> Result<String> {
-    let bytes = std::fs::read(path).with_context(|| format!("read file for hash: {}", path.display()))?;
+    let bytes =
+        std::fs::read(path).with_context(|| format!("read file for hash: {}", path.display()))?;
     let digest = Sha256::digest(&bytes);
     Ok(hex::encode(digest))
 }
@@ -120,10 +121,7 @@ pub fn scan_root(root: &Path, max_file_size: u64) -> Result<Vec<ScannedFile>> {
             continue;
         }
 
-        let mtime_secs = metadata
-            .modified()
-            .map(system_time_to_secs)
-            .unwrap_or(0);
+        let mtime_secs = metadata.modified().map(system_time_to_secs).unwrap_or(0);
 
         let sha256 = hash_file(path)?;
         let relative_path = path

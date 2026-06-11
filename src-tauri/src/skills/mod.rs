@@ -64,10 +64,7 @@ impl SkillRegistry {
             return Some(s.clone());
         }
 
-        let plugin_matches: Vec<_> = skills
-            .iter()
-            .filter(|s| s.plugin_name == name)
-            .collect();
+        let plugin_matches: Vec<_> = skills.iter().filter(|s| s.plugin_name == name).collect();
         if plugin_matches.is_empty() {
             return None;
         }

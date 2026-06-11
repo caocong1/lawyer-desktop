@@ -80,7 +80,10 @@ fn default_app_data_dir() -> Result<PathBuf> {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         let home = std::env::var("HOME").context("HOME not set")?;
-        return Ok(PathBuf::from(home).join(".local").join("share").join("inkstatute"));
+        return Ok(PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("inkstatute"));
     }
     #[cfg(not(any(windows, unix)))]
     {
@@ -201,9 +204,7 @@ async fn index_one_file(store: &IndexStore<'_>, file: &ScannedFile) -> Result<()
 /// FTS search within a workspace index. `root_id` is the workspace `root_hash`.
 pub async fn search(root_id: &str, query: &str, k: usize) -> Result<Vec<ChunkHit>> {
     let pool = open_index_pool(root_id).await?;
-    IndexStore::new(&pool, root_id)
-        .search(query, k)
-        .await
+    IndexStore::new(&pool, root_id).search(query, k).await
 }
 
 /// Read a chunk by id (scans workspace index databases under app data dir).

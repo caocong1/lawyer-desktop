@@ -23,7 +23,8 @@ use sqlx::{Pool, Sqlite};
 
 use super::chat_tools::{
     append_tool_results, build_all_tools, build_messages, emit_text_response, execute_tool,
-    stream_response, update_system_prompt, ToolContext, MAX_TOOL_ROUNDS,
+    parse_ask_user_args, stream_response, update_system_prompt, AskUserRequest, ToolContext,
+    MAX_TOOL_ROUNDS,
 };
 use super::files::{grant_directory_access, prepare_directory_context};
 use super::trace::{preview, Tracer};
@@ -149,6 +150,15 @@ pub struct ClassifyAgentModeRequest {
     pub context_refs: Option<Vec<ContextRef>>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct GenerateFollowupPromptsRequest {
+    pub conversation_id: String,
+    pub message_id: String,
+    pub mode: Option<String>,
+    pub user_prompt: Option<String>,
+    pub summary: Option<String>,
+}
+
 #[tauri::command]
 pub async fn classify_agent_mode(
     engine: State<'_, LlmEngine>,
@@ -178,6 +188,85 @@ pub async fn classify_agent_mode(
     Ok(agent_classifier::classify_agent_mode(fast.as_ref(), &ctx).await)
 }
 
+#[tauri::command]
+pub async fn update_message_metadata(
+    db: State<'_, Pool<Sqlite>>,
+    message_id: String,
+    metadata_json: String,
+) -> Result<(), String> {
+    serde_json::from_str::<serde_json::Value>(&metadata_json)
+        .map_err(|e| format!("metadata_json 不是合法 JSON: {}", e))?;
+    db::queries::update_message_metadata(&db, &message_id, &metadata_json)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn generate_followup_prompts(
+    engine: State<'_, LlmEngine>,
+    db: State<'_, Pool<Sqlite>>,
+    req: GenerateFollowupPromptsRequest,
+) -> Result<Vec<String>, String> {
+    let provider = match engine.get_fast_provider().await {
+        Ok(p) => p,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    let rows = db::queries::list_messages(&db, &req.conversation_id)
+        .await
+        .unwrap_or_default();
+    let last_user = rows
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| preview(&m.content, 500))
+        .unwrap_or_default();
+    let mode = req.mode.unwrap_or_else(|| "chat".into());
+    let summary = req.summary.unwrap_or_default();
+    let user_prompt = req.user_prompt.unwrap_or(last_user);
+    let prompt = format!(
+        "你是中国律师桌面助手的提示词推荐器。请基于刚完成的一轮任务生成 3 个后续可点击提示词。\n\
+要求：中文；每条 6-18 个字；必须是用户下一步可直接发给助手的动作；不要解释；只输出 JSON 字符串数组。\n\
+模式：{}\n用户需求：{}\n完成摘要：{}\n消息ID：{}",
+        mode, user_prompt, summary, req.message_id
+    );
+
+    let request = ChatRequest {
+        model: provider.model_name().to_string(),
+        messages: vec![
+            ChatMessage {
+                reasoning_content: None,
+                role: "system".into(),
+                content: "只输出 JSON 字符串数组，不要 Markdown。".into(),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            ChatMessage {
+                reasoning_content: None,
+                role: "user".into(),
+                content: prompt,
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+            },
+        ],
+        tools: None,
+        temperature: Some(0.4),
+        max_tokens: Some(256),
+        stream: false,
+    };
+
+    let response = provider.chat(&request).await.map_err(|e| e.to_string())?;
+    let content = response
+        .choices
+        .first()
+        .and_then(|c| c.message.as_ref())
+        .map(|m| m.content.clone())
+        .unwrap_or_default();
+    Ok(parse_followup_prompts(&content))
+}
+
 fn build_classify_context(
     content: &str,
     context_refs: Option<&Vec<ContextRef>>,
@@ -197,6 +286,48 @@ fn build_classify_context(
         has_file_ref,
         directory_aliases,
     }
+}
+
+fn parse_followup_prompts(content: &str) -> Vec<String> {
+    let trimmed = content.trim();
+    if let Ok(items) = serde_json::from_str::<Vec<String>>(trimmed) {
+        return clean_followup_items(items);
+    }
+    if let (Some(start), Some(end)) = (trimmed.find('['), trimmed.rfind(']')) {
+        if start < end {
+            if let Ok(items) = serde_json::from_str::<Vec<String>>(&trimmed[start..=end]) {
+                return clean_followup_items(items);
+            }
+        }
+    }
+    let items = trimmed
+        .lines()
+        .map(|line| {
+            line.trim()
+                .trim_start_matches(|c: char| {
+                    c.is_ascii_digit() || c == '.' || c == '-' || c == '*' || c == '、'
+                })
+                .trim()
+                .trim_matches('"')
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    clean_followup_items(items)
+}
+
+fn clean_followup_items(items: Vec<String>) -> Vec<String> {
+    let mut out = Vec::new();
+    for item in items {
+        let cleaned = item.trim().trim_matches('`').trim().to_string();
+        if cleaned.is_empty() || out.iter().any(|s| s == &cleaned) {
+            continue;
+        }
+        out.push(cleaned.chars().take(24).collect());
+        if out.len() >= 3 {
+            break;
+        }
+    }
+    out
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -540,7 +671,7 @@ pub async fn send_message(
         if let Some(ref tool_calls) = assistant_msg.tool_calls {
             if !tool_calls.is_empty() {
                 emit_stream_status(&app, &conversation_id, &message_id, "tool");
-                let results = run_traced_tool_calls(
+                let batch = run_traced_tool_calls(
                     &tracer,
                     &tool_ctx,
                     tool_calls,
@@ -549,8 +680,19 @@ pub async fn send_message(
                     round + 1,
                 )
                 .await;
+                if let Some(ask) = batch.ask_user {
+                    return finish_ask_user_turn(
+                        &app,
+                        &db,
+                        &conversation_id,
+                        &message_id,
+                        &tracer,
+                        ask,
+                    )
+                    .await;
+                }
 
-                append_tool_results(&mut messages, assistant_msg, results);
+                append_tool_results(&mut messages, assistant_msg, batch.results);
 
                 if active_skill.is_some() {
                     update_system_prompt(
@@ -568,7 +710,7 @@ pub async fn send_message(
         let embedded = parse_embedded_tool_calls(&assistant_msg.content);
         if !embedded.is_empty() {
             emit_stream_status(&app, &conversation_id, &message_id, "tool");
-            let results = run_traced_tool_calls(
+            let batch = run_traced_tool_calls(
                 &tracer,
                 &tool_ctx,
                 &embedded,
@@ -577,10 +719,21 @@ pub async fn send_message(
                 round + 1,
             )
             .await;
+            if let Some(ask) = batch.ask_user {
+                return finish_ask_user_turn(
+                    &app,
+                    &db,
+                    &conversation_id,
+                    &message_id,
+                    &tracer,
+                    ask,
+                )
+                .await;
+            }
             let mut tool_msg = assistant_msg.clone();
             tool_msg.tool_calls = Some(embedded);
             tool_msg.content = String::new();
-            append_tool_results(&mut messages, tool_msg, results);
+            append_tool_results(&mut messages, tool_msg, batch.results);
             if active_skill.is_some() {
                 update_system_prompt(
                     &mut messages,
@@ -690,7 +843,7 @@ pub async fn send_message(
             let embedded = parse_embedded_tool_calls(&full_response);
             if !embedded.is_empty() {
                 emit_stream_status(&app, &conversation_id, &message_id, "tool");
-                let results = run_traced_tool_calls(
+                let batch = run_traced_tool_calls(
                     &tracer,
                     &tool_ctx,
                     &embedded,
@@ -699,6 +852,17 @@ pub async fn send_message(
                     round + 1,
                 )
                 .await;
+                if let Some(ask) = batch.ask_user {
+                    return finish_ask_user_turn(
+                        &app,
+                        &db,
+                        &conversation_id,
+                        &message_id,
+                        &tracer,
+                        ask,
+                    )
+                    .await;
+                }
                 let tool_msg = ChatMessage {
                     reasoning_content: None,
                     role: "assistant".into(),
@@ -707,7 +871,7 @@ pub async fn send_message(
                     tool_calls: Some(embedded),
                     tool_call_id: None,
                 };
-                append_tool_results(&mut messages, tool_msg, results);
+                append_tool_results(&mut messages, tool_msg, batch.results);
                 continue;
             }
             if leak_retries < MAX_LEAK_RETRIES {
@@ -882,13 +1046,15 @@ pub async fn send_message(
     }
 
     if !full_response.is_empty() {
-        if let Err(e) = db::queries::save_message(
+        if let Err(e) = db::queries::save_message_with_id_and_metadata(
             &db,
+            &message_id,
             &conversation_id,
             "assistant",
             &full_response,
             "[]",
             "[]",
+            None,
         )
         .await
         {
@@ -926,6 +1092,77 @@ fn turn_fail(tracer: &Tracer, stage: &str, msg: String) -> String {
     msg
 }
 
+struct ToolBatch {
+    results: Vec<(String, String)>,
+    ask_user: Option<AskUserRequest>,
+}
+
+async fn finish_ask_user_turn(
+    app: &AppHandle,
+    db: &Pool<Sqlite>,
+    conversation_id: &str,
+    message_id: &str,
+    tracer: &Tracer,
+    ask: AskUserRequest,
+) -> Result<String, String> {
+    emit_stream_status(app, conversation_id, message_id, "clarifying");
+    let summary = "请先补充以下信息，以便继续起草。";
+    let metadata = json!({
+        "display_content": summary,
+        "content_hidden": true,
+        "workflow": {
+            "message_id": message_id,
+            "conversation_id": conversation_id,
+            "status": "waiting",
+            "steps": [
+                {"id": "clarify", "kind": "clarify", "label": "确认缺失信息", "state": "done"},
+                {"id": "wait-user", "kind": "clarify", "label": "等待补充信息", "state": "run"}
+            ],
+            "clarification": {
+                "id": ask.id.clone().unwrap_or_else(|| "clarify".into()),
+                "intro": ask.intro.clone(),
+                "questions": ask.questions,
+                "status": "pending"
+            }
+        }
+    });
+
+    if let Err(e) = db::queries::save_message_with_id_and_metadata(
+        db,
+        message_id,
+        conversation_id,
+        "assistant",
+        summary,
+        "[]",
+        "[]",
+        Some(&metadata.to_string()),
+    )
+    .await
+    {
+        log::warn!("Failed to save ask_user assistant message: {}", e);
+    }
+
+    let _ = app.emit(
+        "chat-stream",
+        StreamChunk {
+            conversation_id: conversation_id.to_string(),
+            message_id: message_id.to_string(),
+            chunk: String::new(),
+            done: true,
+            status: None,
+        },
+    );
+    tracer.emit(
+        "turn_end",
+        json!({
+            "ok": true,
+            "waiting_for_user": true,
+            "duration_ms": tracer.elapsed_ms(),
+        }),
+    );
+    Ok(message_id.to_string())
+}
+
 /// Execute one batch of tool calls, emitting `tool_call` / `tool_result` /
 /// `skill_activated` trace events around each execution.
 async fn run_traced_tool_calls(
@@ -935,14 +1172,17 @@ async fn run_traced_tool_calls(
     active_skill: &mut Option<crate::skills::loader::SkillMetadata>,
     origin: &str,
     round: usize,
-) -> Vec<(String, String)> {
+) -> ToolBatch {
     let mut results = Vec::new();
+    let mut ask_user = None;
     for tc in tool_calls {
         let name = tc.function.name.as_str();
         let tool_kind = if McpManager::is_mcp_tool(name) {
             "mcp"
         } else if name == "select_skill" {
             "skill"
+        } else if name == "ask_user" {
+            "clarify"
         } else {
             "builtin"
         };
@@ -957,6 +1197,14 @@ async fn run_traced_tool_calls(
                 "arguments": preview(&tc.function.arguments, 6000),
             }),
         );
+
+        let parsed_ask = if name == "ask_user" {
+            serde_json::from_str::<serde_json::Value>(&tc.function.arguments)
+                .ok()
+                .and_then(|v| parse_ask_user_args(&v).ok())
+        } else {
+            None
+        };
 
         let skill_before = active_skill.as_ref().map(|s| s.name.clone());
         let started = Instant::now();
@@ -1008,9 +1256,14 @@ async fn run_traced_tool_calls(
             }
         }
 
+        if let Some(ask) = parsed_ask {
+            tracer.emit("ask_user", json!(ask));
+            ask_user = Some(ask);
+        }
+
         results.push((tc.id.clone(), result));
     }
-    results
+    ToolBatch { results, ask_user }
 }
 
 /// Collect the full answer, auto-continuing while the provider reports

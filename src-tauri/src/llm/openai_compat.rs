@@ -43,7 +43,8 @@ impl OpenAiCompatProvider {
             }
         }
 
-        let body = serde_json::to_string(chat_request).context("Failed to serialize chat request")?;
+        let body =
+            serde_json::to_string(chat_request).context("Failed to serialize chat request")?;
 
         Ok(builder.body(body))
     }
