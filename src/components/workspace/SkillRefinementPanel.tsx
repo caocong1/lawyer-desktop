@@ -18,7 +18,6 @@ import {
   rejectProposal,
   runEvalCase,
   runSkillRefinement,
-  seedEvalCases,
   setEvalCaseActive,
   setSkilloptSettings,
   type SkillOptProgressEvent,
@@ -234,9 +233,6 @@ export function SkillRefinementPanel(props: SkillRefinementPanelProps) {
                   )}
                 </For>
               </div>
-              <button type="button" class="srp-action" onClick={() => void seedEvalCases().then(refresh)}>
-                导入国航种子用例
-              </button>
             </Show>
 
             <Show when={tab() === "run"}>

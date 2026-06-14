@@ -51,9 +51,9 @@ curl -s "http://127.0.0.1:8787/api/feedback/export.md?rating=down" -o feedback-e
 4. 发布 skill：`node tools/publish-skill.mjs --root <ai-for-china-legal> --version YYYY.MM.DD.N`
 5. 勿将 GitHub token 或服务端密钥打包进 exe
 
-## 国航评测 Gold Reference
+## 评测 Gold Reference
 
-`eval_cases.gold_reference_path` 指向律师最终版 DOCX；`judge.rs` 对照 rubric + 律师备忘录 + AI 输出三方评分。路径仅在 skill 项目/评测环境使用，不暴露给律师 UI。
+`eval_cases.gold_reference_path` 指向律师审定样稿；`judge.rs` 对照 rubric + 律师审定样稿 + AI 输出三方评分。路径仅在 skill 项目/评测环境使用，不暴露给律师 UI。
 
 ## 隐私
 

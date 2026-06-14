@@ -558,18 +558,13 @@ impl Default for SkillOptWeights {
 
 impl Default for SkillOptSettings {
     fn default() -> Self {
-        let mut roots = Vec::new();
-        let default = crate::security::eval_sandbox::EvalPathSandbox::default_guohang_root();
-        if default.is_dir() {
-            roots.push(default.to_string_lossy().to_string());
-        }
         Self {
             enabled: false,
             gate: "on".into(),
             auto_adopt: "off".into(),
             weights: SkillOptWeights::default(),
             budget_tokens: 100_000,
-            eval_data_roots: roots,
+            eval_data_roots: Vec::new(),
             optimizer_provider: None,
         }
     }

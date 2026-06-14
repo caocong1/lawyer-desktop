@@ -553,7 +553,7 @@ mod tests {
 
         let temp = std::env::temp_dir().join(format!("lawyer-ws-data3-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&temp).unwrap();
-        let content = "# 备忘录\n重庆市双业融资担保有限公司出具投标保函，受益人为国航重庆分公司。";
+        let content = "# 备忘录\n某融资担保有限公司出具投标保函，受益人为采购人。";
         let scanned = make_scanned(&temp, "备忘录.md", content);
         let chunks = chunk_markdown(&scanned.relative_path, content);
         store
@@ -563,7 +563,7 @@ mod tests {
 
         // Model-style multi-keyword query: no chunk contains this as one phrase.
         let hits = store
-            .search("投标保函 索赔 双业融资担保 广东九洲", 10)
+            .search("投标保函 索赔 融资担保 履约", 10)
             .await
             .unwrap();
         assert!(!hits.is_empty(), "multi-keyword OR query should match");

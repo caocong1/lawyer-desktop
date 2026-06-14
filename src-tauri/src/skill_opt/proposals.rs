@@ -75,9 +75,7 @@ pub async fn adopt_proposal_to_disk(
 }
 
 fn append_forward_test_log(skills_root: &Path, proposal: &SkillProposalRow) -> anyhow::Result<()> {
-    let log_path = skills_root.join(
-        "learning-materials/guohang-chongqing-shuangye/forward-tests/forward-tests.md",
-    );
+    let log_path = skills_root.join("forward-tests.md");
     if !log_path.exists() {
         return Ok(());
     }

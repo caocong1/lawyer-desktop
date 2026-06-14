@@ -52,7 +52,7 @@ bun run feedback:export -- --rating=down --status=open -o feedback-export.md
 2. 将 `tools/feedback-refinement/SKILL.md` 复制到 skill 仓库 `shared/feedback-refinement/SKILL.md`（或在助手会话中 @ 引用 lawyer-desktop 内路径）
 3. 附加 `feedback-export.md`，说明任务，例如：
 
-   > 执行 feedback-refinement：处理 export 中 open 的 down 反馈，优先 litigation-legal / 国航相关
+   > 执行 feedback-refinement：处理 export 中 open 的 down 反馈，优先 litigation-legal / 文书质量相关
 
 ### 5. 发布后标记已处理
 
@@ -107,7 +107,7 @@ Triage 状态保存在 `tools/sync-service/data/feedback-triage.json`。
 |------|------|------|
 | 法条引用、文书结构、检索、案由 | `ai-for-china-legal` | 改 `plugins/.../SKILL.md` |
 | 同步、隐私、UI、崩溃 | `lawyer-desktop` | 改 `src/` / `src-tauri/` |
-| 评测基准 | `lawyer-desktop` skill_opt + skill 仓库 gold 文件 | rubric、国航 DOCX |
+| 评测基准 | `lawyer-desktop` skill_opt + skill 仓库 gold 文件 | rubric、律师审定样稿 |
 
 ---
 
@@ -123,12 +123,12 @@ Triage 状态保存在 `tools/sync-service/data/feedback-triage.json`。
 
 ---
 
-## 国航验证
+## 发布前验证
 
-改动涉及诉讼方案/国航案时，在 dev 环境跑 eval：
+改动涉及诉讼方案、文书结构或法律推理时，在 dev 环境跑 eval：
 
-1. `seed_eval_cases` 已含 gold DOCX 路径
-2. `judge.rs` 对照 rubric + 律师最终版 + AI 输出
+1. 准备评测材料、rubric 和律师审定样稿
+2. `judge.rs` 对照 rubric + 律师审定样稿 + AI 输出
 3. val 分数必须 **严格高于** 改动前基线才发布
 
 ---

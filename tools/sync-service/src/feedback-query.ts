@@ -191,7 +191,7 @@ export function exportFeedbackMarkdown(
     "2. 按 plugin/skill 聚类问题模式",
     "3. 法律质量问题 → 改 ai-for-china-legal 对应 SKILL.md（有界编辑 REPLACE/APPEND）",
     "4. App/同步/UI 问题 → 改 lawyer-desktop",
-    "5. 国航案用 gold-rubric + 律师最终版 DOCX 做 val 回放",
+    "5. 相关评测用例用 rubric + 律师审定样稿做 val 回放",
     "6. 通过后 git commit，运行 tools/publish-skill 发布 skill 包",
     "```",
     "",

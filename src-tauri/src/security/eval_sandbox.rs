@@ -12,18 +12,8 @@ impl EvalPathSandbox {
         Self { allowed_roots }
     }
 
-    pub fn default_guohang_root() -> PathBuf {
-        PathBuf::from(
-            r"C:\Users\sorawatcher\workspace\cn-lawyer-docs-skill\learning-materials\guohang-chongqing-shuangye\case-materials\案件资料",
-        )
-    }
-
     pub fn with_defaults(extra_dirs: &[String]) -> Result<Self> {
         let mut roots = Vec::new();
-        let default = Self::default_guohang_root();
-        if default.is_dir() {
-            roots.push(default);
-        }
         for dir in extra_dirs {
             let path = PathBuf::from(dir);
             if path.is_dir() {

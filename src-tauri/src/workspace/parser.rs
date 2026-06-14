@@ -226,7 +226,7 @@ mod tests {
                 ),
                 docx_rs::TableCell::new().add_paragraph(
                     docx_rs::Paragraph::new()
-                        .add_run(docx_rs::Run::new().add_text("重庆市双业融资担保有限公司")),
+                        .add_run(docx_rs::Run::new().add_text("某融资担保有限公司")),
                 ),
             ])]))
             .build()
@@ -240,7 +240,7 @@ mod tests {
             doc.markdown
         );
         assert!(doc.markdown.contains("索赔金额为人民币500,000元。"));
-        assert!(doc.markdown.contains("被告 | 重庆市双业融资担保有限公司"));
+        assert!(doc.markdown.contains("被告 | 某融资担保有限公司"));
         let _ = fs::remove_dir_all(&dir);
     }
 

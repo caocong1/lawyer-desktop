@@ -201,9 +201,6 @@ pub fn run() {
                             let _ = tx.send(Err(format!("db sync migration failed: {}", e)));
                             return;
                         }
-                        if let Err(e) = skill_opt::seed::ensure_guohang_seed(&pool).await {
-                            log::warn!("Failed to seed guohang eval case: {}", e);
-                        }
                         handle.manage(pool);
                         let _ = tx.send(Ok(()));
                     }
@@ -251,11 +248,7 @@ pub fn run() {
             });
             let eval_sandbox = Arc::new(RwLock::new(
                 security::eval_sandbox::EvalPathSandbox::with_defaults(&eval_roots)
-                    .unwrap_or_else(|_| {
-                        security::eval_sandbox::EvalPathSandbox::new(vec![
-                            security::eval_sandbox::EvalPathSandbox::default_guohang_root(),
-                        ])
-                    }),
+                    .unwrap_or_else(|_| security::eval_sandbox::EvalPathSandbox::new(Vec::new())),
             ));
             app.manage(eval_sandbox);
 
@@ -512,7 +505,6 @@ pub fn run() {
             commands::skillopt::list_all_feedback,
             commands::skillopt::list_eval_cases,
             commands::skillopt::set_eval_case_active,
-            commands::skillopt::seed_eval_cases,
             commands::skillopt::run_eval_case,
             commands::skillopt::list_eval_runs,
             commands::skillopt::list_proposals,

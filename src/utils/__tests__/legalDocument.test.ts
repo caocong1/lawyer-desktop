@@ -174,18 +174,18 @@ describe("evidence report markdown helpers", () => {
 
 ---
 
-# 重庆市双业融资担保有限公司投标保函索赔案诉讼方案
+# 某融资担保有限公司投标保函索赔纠纷诉讼方案
 
 > **基于本案卷材料形成**
 
 ## 核心结论
 
-建议以中国国际航空股份有限公司重庆分公司为原告。
+建议以某采购服务有限公司为原告。
 `;
 
   it("strips process narration before the first H1 heading", () => {
     const stripped = stripReportPreamble(report);
-    expect(stripped.startsWith("# 重庆市双业融资担保有限公司投标保函索赔案诉讼方案")).toBe(true);
+    expect(stripped.startsWith("# 某融资担保有限公司投标保函索赔纠纷诉讼方案")).toBe(true);
     expect(stripped).not.toContain("现在进入");
     expect(stripped).toContain("## 核心结论");
   });
@@ -202,7 +202,7 @@ describe("evidence report markdown helpers", () => {
 
   it("derives the report title from the first H1", () => {
     expect(markdownReportTitle(stripReportPreamble(report))).toBe(
-      "重庆市双业融资担保有限公司投标保函索赔案诉讼方案",
+      "某融资担保有限公司投标保函索赔纠纷诉讼方案",
     );
   });
 

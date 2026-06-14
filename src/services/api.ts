@@ -522,10 +522,6 @@ export async function setEvalCaseActive(caseId: string, active: boolean): Promis
   return invoke("set_eval_case_active", { caseId, active });
 }
 
-export async function seedEvalCases(): Promise<void> {
-  return invoke("seed_eval_cases");
-}
-
 export async function runEvalCase(caseId: string): Promise<{ run: EvalRunRow; answer_preview: string }> {
   return invoke("run_eval_case", { caseId });
 }

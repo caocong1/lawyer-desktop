@@ -13,7 +13,7 @@ argument-hint: "[时间范围|skill名|remote_id 列表，如：过去7天 litig
 ## 何时使用
 
 - 收到 `feedback-export.md` 或调用 `GET /api/feedback/export.md`
-- 用户说：「根据最近 XXX 反馈更新 skill」「处理国航案相关 down 反馈」
+- 用户说：「根据最近 XXX 反馈更新 skill」「处理某类文书质量 down 反馈」
 - Skill 包发布前需要对照真实律师意见做最后一轮修正
 
 ## 输入来源
@@ -57,7 +57,7 @@ curl -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json"
 ### 2. 定位 SKILL.md
 
 - 在 `ai-for-china-legal` 中按 plugin 目录找目标 skill
-- 国航/诉讼类优先：`litigation-legal`、`matter-intake` 等
+- 诉讼类反馈优先定位：`litigation-legal`、`matter-intake` 等
 - 读取 `shared/research-gate/SKILL.md` 确认检索闸门未被破坏
 
 ### 3. 有界编辑（禁止整篇重写）
@@ -76,10 +76,10 @@ APPEND:追加段落（放在文档末尾）
 
 ### 4. 验证（闸门）
 
-**国航案**（若相关）：
-- 材料：`learning-materials/guohang-chongqing-shuangye/case-materials/案件资料`
-- Gold rubric：`learning-materials/guohang-chongqing-shuangye/evaluation/gold-rubric.md`
-- Gold reference：律师最终版 DOCX（见 `lawyer-desktop` seed 路径）
+**评测用例**（若相关）：
+- 材料：评测专用目录，需通过 `skillopt_eval_data_roots` 授权
+- Gold rubric：评测用例内的评分标准
+- Gold reference：律师审定样稿
 - 在 `lawyer-desktop` dev 环境：`run_eval_case` / SkillOpt 面板，**val 分数必须严格高于基线**
 
 **一般 skill**：
@@ -107,7 +107,7 @@ node tools/publish-skill.mjs --root ../ai-for-china-legal --version 2026.06.15.1
 1. **处理的反馈** — remote_id 列表
 2. **问题模式** — 聚类摘要
 3. **改动文件** — 路径 + REPLACE/APPEND 摘要
-4. **验证结果** — 国航/val 分数或人工核对结论
+4. **验证结果** — val 分数或人工核对结论
 5. **发布版本** — manifest version + sha256
 6. **Triage** — 已标记 handled 的 remote_id
 

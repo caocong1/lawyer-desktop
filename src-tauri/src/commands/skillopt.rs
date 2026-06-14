@@ -18,7 +18,6 @@ use crate::skill_opt::optimizer::{mine_eval_cases_from_feedback, run_refinement,
 use crate::skill_opt::proposals::adopt_proposal_to_disk;
 use crate::skill_opt::runner::{run_case, skill_content_hash};
 use crate::skill_opt::score::composite_score;
-use crate::skill_opt::seed::ensure_guohang_seed;
 use crate::skills::SkillRegistry;
 
 // ---------------------------------------------------------------------------
@@ -174,11 +173,6 @@ pub async fn set_eval_case_active(
     db::queries::set_eval_case_active(&db, &case_id, active)
         .await
         .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn seed_eval_cases(db: State<'_, Pool<Sqlite>>) -> Result<(), String> {
-    ensure_guohang_seed(&db).await.map_err(|e| e.to_string())
 }
 
 #[derive(Debug, Serialize)]

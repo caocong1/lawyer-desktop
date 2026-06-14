@@ -3,7 +3,6 @@ pub mod optimizer;
 pub mod proposals;
 pub mod runner;
 pub mod score;
-pub mod seed;
 
 use serde::{Deserialize, Serialize};
 
