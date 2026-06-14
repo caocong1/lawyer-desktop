@@ -1,0 +1,84 @@
+/* @ mention autocomplete dropdown — positioned by parent container */
+.mention-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 30;
+  min-width: 200px;
+  max-width: 320px;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: var(--shadow-pop);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+
+.mention-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: none;
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--ink);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.mention-item:hover,
+.mention-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.mention-item-icon {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+
+.mention-item.active .mention-item-icon {
+  color: var(--accent);
+}
+
+.mention-item-icon svg {
+  width: 15px;
+  height: 15px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7;
+}
+
+.mention-item-name {
+  flex: 1;
+  font-family: var(--mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12.5px;
+}
+
+.mention-item-kind {
+  font-size: 11px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.mention-empty {
+  padding: 12px 14px;
+  font-size: 12.5px;
+  color: var(--muted);
+  text-align: center;
+}

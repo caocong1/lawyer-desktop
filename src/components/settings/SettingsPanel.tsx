@@ -15,8 +15,21 @@ import {
   getMcpHealth,
   getAllowedFileDirs,
   setAllowedFileDirs,
+  getLawLibraryStatus,
+  reindexLawLibrary,
+  setSyncSettings,
+  getSyncStatus,
+  flushFeedbackOutbox,
+  testSyncConnection,
 } from "../../services/api";
-import type { LlmProvider, ProviderPreset, SkillMetadata } from "../../services/api";
+import type {
+  LawLibraryStatus,
+  LlmProvider,
+  McpServerHealth,
+  ProviderPreset,
+  SkillMetadata,
+  SyncSettings,
+} from "../../services/api";
 import { useSettings } from "../../stores/settings";
 import "./SettingsPanel.css";
 
@@ -27,7 +40,7 @@ export interface SettingsPanelProps {
 
 export function SettingsPanel(props: SettingsPanelProps) {
   const [activeTab, setActiveTab] = createSignal<
-    "provider" | "skills" | "files" | "mcp" | "about"
+    "provider" | "skills" | "sync" | "files" | "mcp" | "about"
   >("provider");
   const [presets, setPresets] = createSignal<ProviderPreset[]>([]);
   const [selectedPreset, setSelectedPreset] = createSignal<string>("qwen");
@@ -51,11 +64,25 @@ export function SettingsPanel(props: SettingsPanelProps) {
   const [skillsPath, setSkillsPath] = createSignal("");
   const [skills, setSkills] = createSignal<SkillMetadata[]>([]);
   const [skillsCount, setSkillsCount] = createSignal(0);
-  const [mcpHealth, setMcpHealth] = createSignal<Record<string, boolean>>({});
+  const [mcpHealth, setMcpHealth] = createSignal<McpServerHealth[]>([]);
+  const [mcpChecking, setMcpChecking] = createSignal(false);
+  const [lawLibrary, setLawLibrary] = createSignal<LawLibraryStatus | null>(null);
+  const [lawLibraryMessage, setLawLibraryMessage] = createSignal<string | null>(null);
+  const [reindexing, setReindexing] = createSignal(false);
   const [allowedDirs, setAllowedDirs] = createSignal<string[]>([]);
   const [dirsLoading, setDirsLoading] = createSignal(false);
   const [dirsSaving, setDirsSaving] = createSignal(false);
   const [dirsMessage, setDirsMessage] = createSignal<string | null>(null);
+  const [syncSettings, setSyncSettingsState] = createSignal<SyncSettings | null>(null);
+  const [syncBaseUrl, setSyncBaseUrl] = createSignal("");
+  const [syncApiKey, setSyncApiKey] = createSignal("");
+  const [syncUploadEnabled, setSyncUploadEnabled] = createSignal(true);
+  const [syncUploadFull, setSyncUploadFull] = createSignal(false);
+  const [syncSkillsChannel, setSyncSkillsChannel] = createSignal("stable");
+  const [syncAppChannel, setSyncAppChannel] = createSignal("stable");
+  const [syncPending, setSyncPending] = createSignal(0);
+  const [syncSaving, setSyncSaving] = createSignal(false);
+  const [syncMessage, setSyncMessage] = createSignal<string | null>(null);
 
   const { setIsConfigured, setActiveProvider } = useSettings();
 
@@ -225,11 +252,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
       }
     }
 
-    try {
-      setMcpHealth(await getMcpHealth());
-    } catch {
-      setMcpHealth({});
-    }
+    await refreshDataSources();
 
     try {
       const root = await getSkillsRoot();
@@ -252,7 +275,40 @@ export function SettingsPanel(props: SettingsPanelProps) {
     } finally {
       setDirsLoading(false);
     }
+
+    void refreshSyncStatus();
   });
+
+  async function refreshDataSources() {
+    setMcpChecking(true);
+    try {
+      setMcpHealth(await getMcpHealth());
+    } catch {
+      setMcpHealth([]);
+    } finally {
+      setMcpChecking(false);
+    }
+    try {
+      setLawLibrary(await getLawLibraryStatus());
+      setLawLibraryMessage(null);
+    } catch (e) {
+      setLawLibrary(null);
+      setLawLibraryMessage(String(e));
+    }
+  }
+
+  async function runReindex() {
+    setReindexing(true);
+    try {
+      const stats = await reindexLawLibrary();
+      setLawLibraryMessage(`重新索引完成：${stats.file_count} 个文件 / ${stats.chunk_count} 个条文块`);
+      setLawLibrary(await getLawLibraryStatus());
+    } catch (e) {
+      setLawLibraryMessage(`重新索引失败：${String(e)}`);
+    } finally {
+      setReindexing(false);
+    }
+  }
 
   function selectPreset(name: string) {
     const preset = presets().find((p) => p.name === name);
@@ -378,6 +434,65 @@ export function SettingsPanel(props: SettingsPanelProps) {
     await persistAllowedDirs(allowedDirs().filter((d) => d !== path));
   }
 
+  async function refreshSyncStatus() {
+    try {
+      const status = await getSyncStatus();
+      setSyncSettingsState(status.settings);
+      setSyncPending(status.pending_outbox);
+      setSyncBaseUrl(status.settings.sync_base_url ?? "");
+      setSyncUploadEnabled(status.settings.feedback_upload_enabled);
+      setSyncUploadFull(status.settings.upload_full_answer);
+      setSyncSkillsChannel(status.settings.skills_channel);
+      setSyncAppChannel(status.settings.app_update_channel);
+    } catch (e) {
+      console.error("加载同步设置失败:", e);
+    }
+  }
+
+  async function handleSaveSync() {
+    setSyncSaving(true);
+    setSyncMessage(null);
+    try {
+      await setSyncSettings({
+        sync_base_url: syncBaseUrl().trim() || null,
+        sync_api_key: syncApiKey().trim() || null,
+        feedback_upload_enabled: syncUploadEnabled(),
+        upload_full_answer: syncUploadFull(),
+        skills_channel: syncSkillsChannel(),
+        app_update_channel: syncAppChannel(),
+      });
+      setSyncApiKey("");
+      await refreshSyncStatus();
+      setSyncMessage("✅ 同步设置已保存");
+      props.onSaved?.("同步设置已保存");
+    } catch (e) {
+      setSyncMessage(`❌ 保存失败: ${String(e)}`);
+    } finally {
+      setSyncSaving(false);
+    }
+  }
+
+  async function handleTestSync() {
+    setSyncMessage(null);
+    try {
+      await testSyncConnection();
+      setSyncMessage("✅ 同步服务连接正常");
+    } catch (e) {
+      setSyncMessage(`❌ 连接失败: ${String(e)}`);
+    }
+  }
+
+  async function handleFlushOutbox() {
+    setSyncMessage(null);
+    try {
+      const n = await flushFeedbackOutbox();
+      await refreshSyncStatus();
+      setSyncMessage(n > 0 ? `✅ 已上报 ${n} 条反馈` : "暂无待同步反馈");
+    } catch (e) {
+      setSyncMessage(`❌ 同步失败: ${String(e)}`);
+    }
+  }
+
   return (
     <div class="settings-overlay" onClick={props.onClose}>
       <div class="settings-panel" onClick={(e) => e.stopPropagation()}>
@@ -405,6 +520,16 @@ export function SettingsPanel(props: SettingsPanelProps) {
           </button>
           <button
             type="button"
+            class={`tab ${activeTab() === "sync" ? "active" : ""}`}
+            onClick={() => {
+              setActiveTab("sync");
+              void refreshSyncStatus();
+            }}
+          >
+            同步
+          </button>
+          <button
+            type="button"
             class={`tab ${activeTab() === "files" ? "active" : ""}`}
             onClick={() => setActiveTab("files")}
           >
@@ -415,7 +540,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
             class={`tab ${activeTab() === "mcp" ? "active" : ""}`}
             onClick={() => setActiveTab("mcp")}
           >
-            MCP
+            数据源
           </button>
           <button
             type="button"
@@ -605,7 +730,13 @@ export function SettingsPanel(props: SettingsPanelProps) {
               加载技能
             </button>
             <Show when={skillsCount() > 0}>
-              <p class="skills-count">已加载 {skillsCount()} 个技能</p>
+              <p class="skills-count">
+                已加载 {skillsCount()} 个技能
+                <Show when={syncSettings()?.skills_version}>
+                  {" "}
+                  · 包版本 {syncSettings()?.skills_version}
+                </Show>
+              </p>
               <div class="skills-list scroll">
                 <For each={skills()}>
                   {(skill) => (
@@ -617,6 +748,78 @@ export function SettingsPanel(props: SettingsPanelProps) {
                   )}
                 </For>
               </div>
+            </Show>
+          </Show>
+
+          <Show when={activeTab() === "sync"}>
+            <p class="skill-desc">
+              反馈将先入本地队列，联网后自动上报同步服务。默认仅上传回答摘要，不上传案情全文。
+            </p>
+            <div class="form-group">
+              <label>同步服务地址</label>
+              <input
+                type="text"
+                value={syncBaseUrl()}
+                onInput={(e) => setSyncBaseUrl(e.currentTarget.value)}
+                placeholder="http://127.0.0.1:8787"
+              />
+            </div>
+            <div class="form-group">
+              <label>API Key（可选）</label>
+              <input
+                type="password"
+                value={syncApiKey()}
+                onInput={(e) => setSyncApiKey(e.currentTarget.value)}
+                placeholder={syncSettings()?.has_api_key ? "已保存，留空则不修改" : "Bearer token"}
+              />
+            </div>
+            <div class="form-group">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={syncUploadEnabled()}
+                  onChange={(e) => setSyncUploadEnabled(e.currentTarget.checked)}
+                />
+                启用反馈上报
+              </label>
+            </div>
+            <div class="form-group">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={syncUploadFull()}
+                  onChange={(e) => setSyncUploadFull(e.currentTarget.checked)}
+                />
+                上传 AI 回答全文（含案情，需律所授权）
+              </label>
+            </div>
+            <div class="form-group">
+              <label>Skills 更新通道</label>
+              <select
+                value={syncSkillsChannel()}
+                onChange={(e) => setSyncSkillsChannel(e.currentTarget.value)}
+              >
+                <option value="stable">stable</option>
+                <option value="beta">beta</option>
+              </select>
+            </div>
+            <Show when={syncSettings()?.device_id}>
+              <p class="skill-desc">设备 ID：{syncSettings()?.device_id}</p>
+            </Show>
+            <p class="skills-count">待同步反馈：{syncPending()} 条</p>
+            <div class="form-actions">
+              <button type="button" class="btn-primary" disabled={syncSaving()} onClick={() => void handleSaveSync()}>
+                {syncSaving() ? "保存中…" : "保存同步设置"}
+              </button>
+              <button type="button" class="btn-secondary" onClick={() => void handleTestSync()}>
+                测试连接
+              </button>
+              <button type="button" class="btn-secondary" onClick={() => void handleFlushOutbox()}>
+                立即同步反馈
+              </button>
+            </div>
+            <Show when={syncMessage()}>
+              <div class="test-result">{syncMessage()}</div>
             </Show>
           </Show>
 
@@ -666,19 +869,80 @@ export function SettingsPanel(props: SettingsPanelProps) {
           </Show>
 
           <Show when={activeTab() === "mcp"}>
-            <p class="skills-count">法规数据库等 MCP 连接器状态</p>
+            <div class="ds-section-head">
+              <p class="skills-count">在线检索连接器（MCP）</p>
+              <button
+                type="button"
+                class="ds-refresh"
+                disabled={mcpChecking()}
+                onClick={() => void refreshDataSources()}
+              >
+                {mcpChecking() ? "检测中…" : "重新检测"}
+              </button>
+            </div>
             <div class="skills-list scroll">
-              <For each={Object.entries(mcpHealth())}>
-                {([name, ok]) => (
+              <For each={mcpHealth()}>
+                {(server) => (
                   <div class="skill-item">
-                    <strong>{name}</strong>
-                    <span class={ok ? "mcp-ok" : "mcp-off"}>{ok ? "在线" : "离线"}</span>
+                    <strong>{server.name}</strong>
+                    <span class="ds-tools">{server.online ? `${server.tool_count} 个工具` : ""}</span>
+                    <span class={server.online ? "mcp-ok" : "mcp-off"}>
+                      {server.online ? "在线" : "离线"}
+                    </span>
+                    <Show when={!server.online && server.error}>
+                      <span class="ds-error" title={server.error ?? ""}>
+                        {server.error}
+                      </span>
+                    </Show>
                   </div>
                 )}
               </For>
             </div>
-            <Show when={Object.keys(mcpHealth()).length === 0}>
-              <p class="skill-desc">未配置 MCP 服务器，或 LAW_DB_API_KEY 未设置</p>
+            <Show when={mcpHealth().length === 0}>
+              <p class="skill-desc">未配置 MCP 服务器（.mcp.json），在线法规/案例检索不可用；本地法规库仍可用。</p>
+            </Show>
+
+            <div class="ds-section-head ds-lib-head">
+              <p class="skills-count">本地法规库（离线核验基准）</p>
+              <button
+                type="button"
+                class="ds-refresh"
+                disabled={reindexing()}
+                onClick={() => void runReindex()}
+              >
+                {reindexing() ? "索引中…" : "重新索引"}
+              </button>
+            </div>
+            <Show
+              when={lawLibrary()}
+              fallback={<p class="skill-desc">{lawLibraryMessage() ?? "法规库尚未初始化"}</p>}
+            >
+              {(lib) => (
+                <>
+                  <p class="skill-desc">
+                    已收录 {lib().law_count} 部法规 / {lib().article_count} 条；索引状态：
+                    {lib().index_status?.status ?? "未知"}（{lib().index_status?.chunk_count ?? 0} 块）
+                    <br />
+                    {lib().root_path}
+                  </p>
+                  <div class="skills-list scroll ds-lib-list">
+                    <For each={lib().laws}>
+                      {(law) => (
+                        <div class="skill-item">
+                          <strong>{law.name}</strong>
+                          <span class="ds-tools">
+                            {law.article_count ?? "?"} 条 · {law.status ?? "时效未知"} ·{" "}
+                            {law.text_verification ?? "待核验"}
+                          </span>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                </>
+              )}
+            </Show>
+            <Show when={lawLibraryMessage() && lawLibrary()}>
+              <p class="test-result">{lawLibraryMessage()}</p>
             </Show>
           </Show>
 

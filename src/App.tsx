@@ -2,12 +2,14 @@ import { createSignal, Show, onMount } from "solid-js";
 import { HomePage } from "./components/home/HomePage";
 import { ConversationDrawer } from "./components/layout/ConversationDrawer";
 import { TitleBar } from "./components/layout/TitleBar";
+import { AppUpdateBanner } from "./components/layout/AppUpdateBanner";
 import { Workspace } from "./components/workspace/Workspace";
 import { SettingsPanel } from "./components/settings/SettingsPanel";
 import { useSettings } from "./stores/settings";
 import { useConversation } from "./stores/conversation";
 import { createConversation } from "./services/api";
 import "./App.css";
+import "./components/layout/AppUpdateBanner.css";
 
 type Screen = "home" | "workspace";
 
@@ -92,6 +94,7 @@ export default function App() {
         onOpenConversations={() => setConversationListOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
       />
+      <AppUpdateBanner />
 
       <div class="stage">
         <Show

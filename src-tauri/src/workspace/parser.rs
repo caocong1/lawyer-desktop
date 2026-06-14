@@ -158,6 +158,11 @@ fn parse_docx(path: &Path) -> Result<ParsedDocument> {
     })
 }
 
+/// Extract plain text from a DOCX file (shared by workspace indexer and file tools).
+pub fn extract_docx_text(path: &Path) -> Result<String> {
+    Ok(parse_docx(path)?.markdown)
+}
+
 /// Parse a file into unified Markdown text based on extension.
 pub fn parse_file(path: &Path, ext: &str) -> Result<ParsedDocument> {
     let ext = ext.to_lowercase();

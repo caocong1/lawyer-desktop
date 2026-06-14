@@ -64,4 +64,14 @@ export interface MessageMetadata {
   display_content?: string;
   content_hidden?: boolean;
   workflow?: WorkflowState;
+  /** Backend citation audit (citations::CitationAudit) — must survive every
+   *  frontend metadata write or the backend's copy gets clobbered. */
+  citation_audit?: import("./legal").CitationAudit;
+  active_skill?: { name: string; plugin_name: string };
+  feedback?: {
+    rating: "up" | "down";
+    comment?: string;
+    dimensions?: string[];
+    at: string;
+  };
 }

@@ -15,6 +15,13 @@ export interface CitationPanelProps {
   onLocate: (c: CitationCard) => void;
 }
 
+function verificationBadge(c: CitationCard): { cls: string; label: string } | null {
+  if (c.verified === "verified") return { cls: "ok", label: "✓ 已核验" };
+  if (c.verified === "retrieved") return { cls: "ret", label: "✓ 已检索" };
+  if (c.verified === "unverified") return { cls: "warn", label: "⚠ 待律师复核" };
+  return null;
+}
+
 export function CitationPanel(props: CitationPanelProps) {
   const { citationGroups } = useConversation();
 
@@ -62,8 +69,19 @@ export function CitationPanel(props: CitationPanelProps) {
                     style={{ width: "12px", height: "12px" }}
                   />
                   {c.tag}
+                  <Show when={verificationBadge(c)}>
+                    {(badge) => (
+                      <span class={`cc-verify ${badge().cls}`}>{badge().label}</span>
+                    )}
+                  </Show>
+                  <Show when={c.tier}>
+                    <span class="cc-tier">{c.tier}</span>
+                  </Show>
                 </div>
                 <div class="cc-title">{c.title}</div>
+                <Show when={c.note}>
+                  <div class="cc-note">{c.note}</div>
+                </Show>
                 <div class="cc-src">{c.src}</div>
                 <div class="cc-text">{c.text}</div>
                 <div class="cc-rel">{renderSegs(c.rel, {})}</div>

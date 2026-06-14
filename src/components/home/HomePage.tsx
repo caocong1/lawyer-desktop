@@ -1,10 +1,12 @@
-import { For, onMount, onCleanup, createSignal, Show } from "solid-js";
+import { For, onMount, onCleanup, createSignal, Show, createMemo } from "solid-js";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Icon } from "../icons/Icons";
+import { MentionMenu } from "../MentionMenu";
 import "./HomePage.css";
 import { useConversation } from "../../stores/conversation";
 import type { ContextRefPayload } from "../../types/contextRefs";
 import { pathToRefAlias } from "../../utils/evidenceFlow";
+import { detectAtTrigger, filterMentionCandidates, buildMentionInsert } from "../../utils/mentions";
 import { DOC_TYPES } from "../../utils/docTypes";
 
 export interface HomePageProps {
@@ -42,16 +44,24 @@ export function HomePage(props: HomePageProps) {
     pendingContextRefs,
     addContextRef,
     removeContextRef,
+    addInlineMention,
   } = useConversation();
   const [input, setInput] = createSignal("");
   const [attachOpen, setAttachOpen] = createSignal(false);
+  const [mentionOpen, setMentionOpen] = createSignal(false);
+  const [mentionQuery, setMentionQuery] = createSignal("");
+  const [mentionIndex, setMentionIndex] = createSignal(0);
   let attachRef: HTMLDivElement | undefined;
   let inputRef: HTMLTextAreaElement | undefined;
+  let mentionMenuRef: HTMLDivElement | undefined;
 
   onMount(() => {
     const onDocClick = (e: MouseEvent) => {
       if (attachOpen() && attachRef && !attachRef.contains(e.target as Node)) {
         setAttachOpen(false);
+      }
+      if (mentionOpen() && mentionMenuRef && !mentionMenuRef.contains(e.target as Node)) {
+        setMentionOpen(false);
       }
     };
     document.addEventListener("click", onDocClick);
@@ -97,6 +107,27 @@ export function HomePage(props: HomePageProps) {
   }
 
   const canSend = () => input().trim().length > 0 || pendingContextRefs().length > 0;
+
+  const mentionCandidates = createMemo(() =>
+    filterMentionCandidates(pendingContextRefs(), mentionQuery()),
+  );
+
+  function insertMention(ref: ContextRefPayload) {
+    const ta = inputRef;
+    if (!ta) return;
+    const text = input();
+    const trigger = detectAtTrigger(text, ta.selectionStart ?? text.length);
+    if (!trigger.active) return;
+    const { newText, cursorAfter } = buildMentionInsert(ref, trigger.atPos, ta.selectionStart ?? text.length, text);
+    setInput(newText);
+    addContextRef(ref);
+    addInlineMention(ref.path);
+    setMentionOpen(false);
+    queueMicrotask(() => {
+      ta.focus();
+      ta.setSelectionRange(cursorAfter, cursorAfter);
+    });
+  }
 
   return (
     <div class="home scroll">
@@ -154,9 +185,53 @@ export function HomePage(props: HomePageProps) {
               class="starter-input"
               placeholder="描述你的法律需求，例如：起草一份股权转让协议，或附加本地资料后生成诉讼方案…"
               value={input()}
-              onInput={(e) => setInput(e.currentTarget.value)}
+              onInput={(e) => {
+                const val = e.currentTarget.value;
+                setInput(val);
+                const ta = e.currentTarget;
+                const trigger = detectAtTrigger(val, ta.selectionStart ?? val.length);
+                if (trigger.active) {
+                  setMentionOpen(true);
+                  setMentionQuery(trigger.query);
+                  setMentionIndex(0);
+                } else {
+                  setMentionOpen(false);
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.isComposing) return;
+                if (!mentionOpen()) return;
+                const cands = mentionCandidates();
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setMentionOpen(false);
+                  return;
+                }
+                if (cands.length === 0) return;
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setMentionIndex((i) => (i + 1) % cands.length);
+                } else if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setMentionIndex((i) => (i - 1 + cands.length) % cands.length);
+                } else if (e.key === "Enter" || e.key === "Tab") {
+                  e.preventDefault();
+                  const ref = cands[mentionIndex()];
+                  if (ref) insertMention(ref);
+                }
+              }}
               rows={3}
             />
+            <Show when={mentionOpen() && pendingContextRefs().length > 0}>
+              <div class="mention-wrap" ref={mentionMenuRef}>
+                <MentionMenu
+                  candidates={mentionCandidates()}
+                  selectedIndex={mentionIndex()}
+                  onSelect={insertMention}
+                  onDismiss={() => setMentionOpen(false)}
+                />
+              </div>
+            </Show>
           </div>
           <div class="starter-bar">
             <div class="attach-wrap" ref={attachRef}>

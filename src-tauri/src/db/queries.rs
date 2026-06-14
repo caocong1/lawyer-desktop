@@ -113,6 +113,17 @@ pub async fn list_messages(
     rows.iter().map(row_to_message).collect()
 }
 
+pub async fn get_message_by_id(pool: &Pool<Sqlite>, id: &str) -> anyhow::Result<Option<Message>> {
+    let row = sqlx::query(
+        "SELECT id, conversation_id, role, content, attachments_json, tool_calls_json, metadata_json, created_at \
+         FROM messages WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    row.as_ref().map(row_to_message).transpose()
+}
+
 pub async fn save_message(
     pool: &Pool<Sqlite>,
     conversation_id: &str,
@@ -477,6 +488,630 @@ pub async fn get_fast_provider_meta(
 
 pub async fn fast_provider_has_api_key(pool: &Pool<Sqlite>) -> anyhow::Result<bool> {
     Ok(get_setting(pool, FAST_PROVIDER_API_KEY).await?.is_some())
+}
+
+// ---------------------------------------------------------------------------
+// SkillOpt schema
+// ---------------------------------------------------------------------------
+
+pub async fn ensure_skill_opt_schema(pool: &Pool<Sqlite>) -> anyhow::Result<()> {
+    let sql = include_str!("../../migrations/004_skill_opt.sql");
+    sqlx::raw_sql(sql)
+        .execute(pool)
+        .await
+        .context("failed to apply skill_opt schema")?;
+    Ok(())
+}
+
+pub async fn ensure_sync_schema(pool: &Pool<Sqlite>) -> anyhow::Result<()> {
+    let has_col: Option<(i64,)> = sqlx::query_as(
+        "SELECT COUNT(*) FROM pragma_table_info('eval_cases') WHERE name = 'gold_reference_path'",
+    )
+    .fetch_optional(pool)
+    .await?;
+    if has_col.map(|(c,)| c).unwrap_or(0) == 0 {
+        sqlx::query("ALTER TABLE eval_cases ADD COLUMN gold_reference_path TEXT")
+            .execute(pool)
+            .await
+            .context("failed to add eval_cases.gold_reference_path")?;
+    }
+
+    let sql = include_str!("../../migrations/005_sync_skill_update.sql");
+    sqlx::raw_sql(sql)
+        .execute(pool)
+        .await
+        .context("failed to apply sync schema")?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// SkillOpt settings
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SkillOptSettings {
+    pub enabled: bool,
+    pub gate: String,
+    pub auto_adopt: String,
+    pub weights: SkillOptWeights,
+    pub budget_tokens: u64,
+    pub eval_data_roots: Vec<String>,
+    pub optimizer_provider: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SkillOptWeights {
+    pub human: f64,
+    pub rubric: f64,
+    pub cite: f64,
+}
+
+impl Default for SkillOptWeights {
+    fn default() -> Self {
+        Self {
+            human: 0.4,
+            rubric: 0.45,
+            cite: 0.15,
+        }
+    }
+}
+
+impl Default for SkillOptSettings {
+    fn default() -> Self {
+        let mut roots = Vec::new();
+        let default = crate::security::eval_sandbox::EvalPathSandbox::default_guohang_root();
+        if default.is_dir() {
+            roots.push(default.to_string_lossy().to_string());
+        }
+        Self {
+            enabled: false,
+            gate: "on".into(),
+            auto_adopt: "off".into(),
+            weights: SkillOptWeights::default(),
+            budget_tokens: 100_000,
+            eval_data_roots: roots,
+            optimizer_provider: None,
+        }
+    }
+}
+
+pub async fn get_skillopt_settings(pool: &Pool<Sqlite>) -> anyhow::Result<SkillOptSettings> {
+    let enabled = get_setting(pool, "skillopt_enabled")
+        .await?
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
+    let gate = get_setting(pool, "skillopt_gate")
+        .await?
+        .unwrap_or_else(|| "on".into());
+    let auto_adopt = get_setting(pool, "skillopt_auto_adopt")
+        .await?
+        .unwrap_or_else(|| "off".into());
+    let weights: SkillOptWeights = get_setting(pool, "skillopt_weights")
+        .await?
+        .and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or_default();
+    let budget_tokens: u64 = get_setting(pool, "skillopt_budget_tokens")
+        .await?
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000);
+    let eval_data_roots: Vec<String> = get_setting(pool, "skillopt_eval_data_roots")
+        .await?
+        .and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or_else(|| SkillOptSettings::default().eval_data_roots);
+    let optimizer_provider = get_setting(pool, "skillopt_optimizer_provider")
+        .await?
+        .and_then(|v| serde_json::from_str(&v).ok());
+
+    Ok(SkillOptSettings {
+        enabled,
+        gate,
+        auto_adopt,
+        weights,
+        budget_tokens,
+        eval_data_roots,
+        optimizer_provider,
+    })
+}
+
+pub async fn set_skillopt_settings(
+    pool: &Pool<Sqlite>,
+    settings: &SkillOptSettings,
+) -> anyhow::Result<()> {
+    set_setting(
+        pool,
+        "skillopt_enabled",
+        if settings.enabled { "true" } else { "false" },
+    )
+    .await?;
+    set_setting(pool, "skillopt_gate", &settings.gate).await?;
+    set_setting(pool, "skillopt_auto_adopt", &settings.auto_adopt).await?;
+    set_setting(
+        pool,
+        "skillopt_weights",
+        &serde_json::to_string(&settings.weights)?,
+    )
+    .await?;
+    set_setting(
+        pool,
+        "skillopt_budget_tokens",
+        &settings.budget_tokens.to_string(),
+    )
+    .await?;
+    set_setting(
+        pool,
+        "skillopt_eval_data_roots",
+        &serde_json::to_string(&settings.eval_data_roots)?,
+    )
+    .await?;
+    if let Some(ref op) = settings.optimizer_provider {
+        set_setting(
+            pool,
+            "skillopt_optimizer_provider",
+            &serde_json::to_string(op)?,
+        )
+        .await?;
+    } else {
+        sqlx::query("DELETE FROM app_settings WHERE key = ?")
+            .bind("skillopt_optimizer_provider")
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
+pub async fn get_eval_data_roots(pool: &Pool<Sqlite>) -> anyhow::Result<Vec<String>> {
+    Ok(get_skillopt_settings(pool).await?.eval_data_roots)
+}
+
+// ---------------------------------------------------------------------------
+// Skill feedback
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SkillFeedbackRow {
+    pub id: String,
+    pub message_id: String,
+    pub conversation_id: String,
+    pub skill_name: Option<String>,
+    pub plugin_name: Option<String>,
+    pub rating: String,
+    pub comment: Option<String>,
+    pub dimensions_json: Option<String>,
+    pub created_at: String,
+}
+
+pub async fn insert_skill_feedback(
+    pool: &Pool<Sqlite>,
+    message_id: &str,
+    conversation_id: &str,
+    skill_name: Option<&str>,
+    plugin_name: Option<&str>,
+    rating: &str,
+    comment: Option<&str>,
+    dimensions_json: Option<&str>,
+) -> anyhow::Result<SkillFeedbackRow> {
+    let id = Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO skill_feedback (id, message_id, conversation_id, skill_name, plugin_name, rating, comment, dimensions_json, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(message_id)
+    .bind(conversation_id)
+    .bind(skill_name)
+    .bind(plugin_name)
+    .bind(rating)
+    .bind(comment)
+    .bind(dimensions_json)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .context("insert skill_feedback")?;
+    Ok(SkillFeedbackRow {
+        id,
+        message_id: message_id.to_string(),
+        conversation_id: conversation_id.to_string(),
+        skill_name: skill_name.map(|s| s.to_string()),
+        plugin_name: plugin_name.map(|s| s.to_string()),
+        rating: rating.to_string(),
+        comment: comment.map(|s| s.to_string()),
+        dimensions_json: dimensions_json.map(|s| s.to_string()),
+        created_at: now,
+    })
+}
+
+pub async fn list_skill_feedback_by_conversation(
+    pool: &Pool<Sqlite>,
+    conversation_id: &str,
+) -> anyhow::Result<Vec<SkillFeedbackRow>> {
+    let rows = sqlx::query(
+        "SELECT id, message_id, conversation_id, skill_name, plugin_name, rating, comment, dimensions_json, created_at \
+         FROM skill_feedback WHERE conversation_id = ? ORDER BY created_at ASC",
+    )
+    .bind(conversation_id)
+    .fetch_all(pool)
+    .await?;
+    rows.iter().map(row_to_skill_feedback).collect()
+}
+
+pub async fn list_all_skill_feedback(
+    pool: &Pool<Sqlite>,
+    limit: i64,
+) -> anyhow::Result<Vec<SkillFeedbackRow>> {
+    let rows = sqlx::query(
+        "SELECT id, message_id, conversation_id, skill_name, plugin_name, rating, comment, dimensions_json, created_at \
+         FROM skill_feedback ORDER BY created_at DESC LIMIT ?",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    rows.iter().map(row_to_skill_feedback).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Eval cases & runs
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EvalCaseRow {
+    pub id: String,
+    pub name: String,
+    pub target_skill: Option<String>,
+    pub target_plugin: Option<String>,
+    pub prompt: String,
+    pub materials_path: Option<String>,
+    pub rubric: Option<String>,
+    pub gold_reference_path: Option<String>,
+    pub split: String,
+    pub origin: String,
+    pub active: bool,
+    pub created_at: String,
+}
+
+pub async fn insert_eval_case(
+    pool: &Pool<Sqlite>,
+    name: &str,
+    target_skill: Option<&str>,
+    target_plugin: Option<&str>,
+    prompt: &str,
+    materials_path: Option<&str>,
+    rubric: Option<&str>,
+    gold_reference_path: Option<&str>,
+    split: &str,
+    origin: &str,
+) -> anyhow::Result<EvalCaseRow> {
+    let id = Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO eval_cases (id, name, target_skill, target_plugin, prompt, materials_path, rubric, gold_reference_path, split, origin, active, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)",
+    )
+    .bind(&id)
+    .bind(name)
+    .bind(target_skill)
+    .bind(target_plugin)
+    .bind(prompt)
+    .bind(materials_path)
+    .bind(rubric)
+    .bind(gold_reference_path)
+    .bind(split)
+    .bind(origin)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+    Ok(EvalCaseRow {
+        id,
+        name: name.to_string(),
+        target_skill: target_skill.map(|s| s.to_string()),
+        target_plugin: target_plugin.map(|s| s.to_string()),
+        prompt: prompt.to_string(),
+        materials_path: materials_path.map(|s| s.to_string()),
+        rubric: rubric.map(|s| s.to_string()),
+        gold_reference_path: gold_reference_path.map(|s| s.to_string()),
+        split: split.to_string(),
+        origin: origin.to_string(),
+        active: true,
+        created_at: now,
+    })
+}
+
+pub async fn get_eval_case(pool: &Pool<Sqlite>, id: &str) -> anyhow::Result<Option<EvalCaseRow>> {
+    let row = sqlx::query(
+        "SELECT id, name, target_skill, target_plugin, prompt, materials_path, rubric, gold_reference_path, split, origin, active, created_at \
+         FROM eval_cases WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    row.as_ref().map(row_to_eval_case).transpose()
+}
+
+pub async fn list_eval_cases(
+    pool: &Pool<Sqlite>,
+    active_only: bool,
+) -> anyhow::Result<Vec<EvalCaseRow>> {
+    let rows = if active_only {
+        sqlx::query(
+            "SELECT id, name, target_skill, target_plugin, prompt, materials_path, rubric, gold_reference_path, split, origin, active, created_at \
+             FROM eval_cases WHERE active = 1 ORDER BY created_at ASC",
+        )
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query(
+            "SELECT id, name, target_skill, target_plugin, prompt, materials_path, rubric, gold_reference_path, split, origin, active, created_at \
+             FROM eval_cases ORDER BY created_at ASC",
+        )
+        .fetch_all(pool)
+        .await?
+    };
+    rows.iter().map(row_to_eval_case).collect()
+}
+
+pub async fn set_eval_case_active(
+    pool: &Pool<Sqlite>,
+    id: &str,
+    active: bool,
+) -> anyhow::Result<()> {
+    sqlx::query("UPDATE eval_cases SET active = ? WHERE id = ?")
+        .bind(if active { 1 } else { 0 })
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EvalRunRow {
+    pub id: String,
+    pub case_id: String,
+    pub skill_hash: Option<String>,
+    pub score: f64,
+    pub rubric_json: Option<String>,
+    pub citation_json: Option<String>,
+    pub tokens: Option<i64>,
+    pub latency_ms: Option<i64>,
+    pub created_at: String,
+}
+
+pub async fn insert_eval_run(
+    pool: &Pool<Sqlite>,
+    case_id: &str,
+    skill_hash: Option<&str>,
+    score: f64,
+    rubric_json: Option<&str>,
+    citation_json: Option<&str>,
+    tokens: Option<i64>,
+    latency_ms: Option<i64>,
+) -> anyhow::Result<EvalRunRow> {
+    let id = Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO eval_runs (id, case_id, skill_hash, score, rubric_json, citation_json, tokens, latency_ms, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(case_id)
+    .bind(skill_hash)
+    .bind(score)
+    .bind(rubric_json)
+    .bind(citation_json)
+    .bind(tokens)
+    .bind(latency_ms)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+    Ok(EvalRunRow {
+        id,
+        case_id: case_id.to_string(),
+        skill_hash: skill_hash.map(|s| s.to_string()),
+        score,
+        rubric_json: rubric_json.map(|s| s.to_string()),
+        citation_json: citation_json.map(|s| s.to_string()),
+        tokens,
+        latency_ms,
+        created_at: now,
+    })
+}
+
+pub async fn list_eval_runs(
+    pool: &Pool<Sqlite>,
+    case_id: &str,
+    limit: i64,
+) -> anyhow::Result<Vec<EvalRunRow>> {
+    let rows = sqlx::query(
+        "SELECT id, case_id, skill_hash, score, rubric_json, citation_json, tokens, latency_ms, created_at \
+         FROM eval_runs WHERE case_id = ? ORDER BY created_at DESC LIMIT ?",
+    )
+    .bind(case_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    rows.iter().map(row_to_eval_run).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Skill proposals
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SkillProposalRow {
+    pub id: String,
+    pub target_path: String,
+    pub base_hash: Option<String>,
+    pub diff: String,
+    pub rationale: Option<String>,
+    pub val_before: Option<f64>,
+    pub val_after: Option<f64>,
+    pub status: String,
+    pub created_at: String,
+    pub adopted_at: Option<String>,
+}
+
+pub async fn insert_skill_proposal(
+    pool: &Pool<Sqlite>,
+    target_path: &str,
+    base_hash: Option<&str>,
+    diff: &str,
+    rationale: Option<&str>,
+    val_before: Option<f64>,
+    val_after: Option<f64>,
+) -> anyhow::Result<SkillProposalRow> {
+    let id = Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO skill_proposals (id, target_path, base_hash, diff, rationale, val_before, val_after, status, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'staged', ?)",
+    )
+    .bind(&id)
+    .bind(target_path)
+    .bind(base_hash)
+    .bind(diff)
+    .bind(rationale)
+    .bind(val_before)
+    .bind(val_after)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+    Ok(SkillProposalRow {
+        id,
+        target_path: target_path.to_string(),
+        base_hash: base_hash.map(|s| s.to_string()),
+        diff: diff.to_string(),
+        rationale: rationale.map(|s| s.to_string()),
+        val_before,
+        val_after,
+        status: "staged".into(),
+        created_at: now,
+        adopted_at: None,
+    })
+}
+
+pub async fn list_skill_proposals(
+    pool: &Pool<Sqlite>,
+    status: Option<&str>,
+) -> anyhow::Result<Vec<SkillProposalRow>> {
+    let rows = match status {
+        Some(s) => {
+            sqlx::query(
+                "SELECT id, target_path, base_hash, diff, rationale, val_before, val_after, status, created_at, adopted_at \
+                 FROM skill_proposals WHERE status = ? ORDER BY created_at DESC",
+            )
+            .bind(s)
+            .fetch_all(pool)
+            .await?
+        }
+        None => {
+            sqlx::query(
+                "SELECT id, target_path, base_hash, diff, rationale, val_before, val_after, status, created_at, adopted_at \
+                 FROM skill_proposals ORDER BY created_at DESC",
+            )
+            .fetch_all(pool)
+            .await?
+        }
+    };
+    rows.iter().map(row_to_skill_proposal).collect()
+}
+
+pub async fn get_skill_proposal(
+    pool: &Pool<Sqlite>,
+    id: &str,
+) -> anyhow::Result<Option<SkillProposalRow>> {
+    let row = sqlx::query(
+        "SELECT id, target_path, base_hash, diff, rationale, val_before, val_after, status, created_at, adopted_at \
+         FROM skill_proposals WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    row.as_ref().map(row_to_skill_proposal).transpose()
+}
+
+pub async fn update_skill_proposal_status(
+    pool: &Pool<Sqlite>,
+    id: &str,
+    status: &str,
+) -> anyhow::Result<()> {
+    let now = Utc::now().to_rfc3339();
+    if status == "adopted" {
+        sqlx::query(
+            "UPDATE skill_proposals SET status = ?, adopted_at = ? WHERE id = ?",
+        )
+        .bind(status)
+        .bind(&now)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    } else {
+        sqlx::query("UPDATE skill_proposals SET status = ? WHERE id = ?")
+            .bind(status)
+            .bind(id)
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
+fn row_to_skill_feedback(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<SkillFeedbackRow> {
+    Ok(SkillFeedbackRow {
+        id: row.get("id"),
+        message_id: row.get("message_id"),
+        conversation_id: row.get("conversation_id"),
+        skill_name: row.get("skill_name"),
+        plugin_name: row.get("plugin_name"),
+        rating: row.get("rating"),
+        comment: row.get("comment"),
+        dimensions_json: row.get("dimensions_json"),
+        created_at: row.get("created_at"),
+    })
+}
+
+fn row_to_eval_case(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<EvalCaseRow> {
+    let active: i32 = row.get("active");
+    Ok(EvalCaseRow {
+        id: row.get("id"),
+        name: row.get("name"),
+        target_skill: row.get("target_skill"),
+        target_plugin: row.get("target_plugin"),
+        prompt: row.get("prompt"),
+        materials_path: row.get("materials_path"),
+        rubric: row.get("rubric"),
+        gold_reference_path: row.get("gold_reference_path"),
+        split: row.get("split"),
+        origin: row.get("origin"),
+        active: active != 0,
+        created_at: row.get("created_at"),
+    })
+}
+
+fn row_to_eval_run(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<EvalRunRow> {
+    Ok(EvalRunRow {
+        id: row.get("id"),
+        case_id: row.get("case_id"),
+        skill_hash: row.get("skill_hash"),
+        score: row.get("score"),
+        rubric_json: row.get("rubric_json"),
+        citation_json: row.get("citation_json"),
+        tokens: row.get("tokens"),
+        latency_ms: row.get("latency_ms"),
+        created_at: row.get("created_at"),
+    })
+}
+
+fn row_to_skill_proposal(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<SkillProposalRow> {
+    Ok(SkillProposalRow {
+        id: row.get("id"),
+        target_path: row.get("target_path"),
+        base_hash: row.get("base_hash"),
+        diff: row.get("diff"),
+        rationale: row.get("rationale"),
+        val_before: row.get("val_before"),
+        val_after: row.get("val_after"),
+        status: row.get("status"),
+        created_at: row.get("created_at"),
+        adopted_at: row.get("adopted_at"),
+    })
 }
 
 // ---------------------------------------------------------------------------

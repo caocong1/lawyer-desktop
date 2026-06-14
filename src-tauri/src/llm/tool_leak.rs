@@ -82,8 +82,18 @@ pub fn sanitize_assistant_content(text: &str) -> String {
         {
             continue;
         }
-        if trimmed.starts_with('<') && trimmed.ends_with('>') && trimmed.len() < 120 {
-            continue;
+        // Only strip `<...>` lines matching known tool-leak tags, not all HTML.
+        if trimmed.starts_with('<') && trimmed.ends_with('>') {
+            let inner = trimmed[1..trimmed.len() - 1].trim().to_lowercase();
+            let inner_stripped = inner.strip_prefix('/').unwrap_or(&inner);
+            if inner_stripped.starts_with("tool_call")
+                || inner_stripped.starts_with("invoke")
+                || inner_stripped.starts_with("parameter")
+                || inner_stripped.starts_with("function_call")
+                || inner_stripped.starts_with("dsml")
+            {
+                continue;
+            }
         }
         out.push_str(line);
         out.push('\n');
@@ -310,5 +320,25 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].function.name, "search_workspace");
         assert!(calls[0].function.arguments.contains("逾期利息"));
+    }
+
+    #[test]
+    fn sanitize_keeps_html_formatting_tags() {
+        let text = "正文内容\n<br>\n<table>\n<tr>\n<td>单元格</td>\n</tr>\n</table>\n<strong>重点</strong>";
+        let clean = sanitize_assistant_content(text);
+        assert!(clean.contains("<br>"), "should keep <br>, got: {}", clean);
+        assert!(clean.contains("<table>"), "should keep <table>");
+        assert!(clean.contains("<strong>"), "should keep <strong>");
+        assert!(clean.contains("正文内容"));
+        assert!(clean.contains("单元格"));
+    }
+
+    #[test]
+    fn sanitize_keeps_short_html_like_tags_under_120() {
+        let text = "段落一\n<p>\n段落二";
+        let clean = sanitize_assistant_content(text);
+        assert!(clean.contains("<p>"), "should keep <p>, got: {}", clean);
+        assert!(clean.contains("段落一"));
+        assert!(clean.contains("段落二"));
     }
 }

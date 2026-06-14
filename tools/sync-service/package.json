@@ -1,0 +1,17 @@
+{
+  "name": "inkstatute-sync-service",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run src/server.ts",
+    "start": "bun run src/server.ts",
+    "feedback:summary": "bun run scripts/feedback-cli.ts summary",
+    "feedback:export": "bun run scripts/feedback-cli.ts export",
+    "feedback:triage": "bun run scripts/feedback-cli.ts triage"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

@@ -24,12 +24,14 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https: http://localhost:* ws://localhost:*"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https: http://localhost:* http://127.0.0.1:* ws://localhost:*"
     }
   },
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
+    "resources": ["resources/law-library/**/*"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -37,5 +39,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "http://127.0.0.1:8787/api/app/latest/{{target}}/{{arch}}/{{current_version}}"
+      ],
+      "pubkey": "dW5zZXQtcmVwbGFjZS13aXRoLXNpZ25lci1wdWJrZXk="
+    }
   }
 }

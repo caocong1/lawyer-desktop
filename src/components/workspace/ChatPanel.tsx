@@ -18,12 +18,15 @@ import {
   shouldShowTimeDivider,
 } from "../../utils/chatTime";
 import { isVisibleChatMessage } from "../../utils/chatVisibility";
+import { MessageFeedback } from "./MessageFeedback";
 import { Icon } from "../icons/Icons";
+import { MentionMenu } from "../MentionMenu";
 import {
   ClarificationCard,
   WorkflowNotice,
   WorkflowSuggestions,
 } from "./WorkflowProgressSteps";
+import { detectAtTrigger, filterMentionCandidates, buildMentionInsert } from "../../utils/mentions";
 import "./ChatPanel.css";
 
 function pathToAlias(path: string, kind: ContextRefPayload["kind"]): string {
@@ -110,6 +113,7 @@ export function ChatPanel(props: ChatPanelProps) {
     pendingContextRefs,
     addContextRef,
     removeContextRef,
+    addInlineMention,
     applyWorkspaceIndexProgress,
     workspaceIndexForPath,
   } = useConversation();
@@ -117,9 +121,13 @@ export function ChatPanel(props: ChatPanelProps) {
 
   const [text, setText] = createSignal("");
   const [attachMenuOpen, setAttachMenuOpen] = createSignal(false);
+  const [mentionOpen, setMentionOpen] = createSignal(false);
+  const [mentionQuery, setMentionQuery] = createSignal("");
+  const [mentionIndex, setMentionIndex] = createSignal(0);
   let threadRef: HTMLDivElement | undefined;
   let taRef: HTMLTextAreaElement | undefined;
   let attachRef: HTMLDivElement | undefined;
+  let mentionMenuRef: HTMLDivElement | undefined;
 
   const visibleMessages = () =>
     messages().filter((m) => isVisibleChatMessage(m));
@@ -175,6 +183,10 @@ export function ChatPanel(props: ChatPanelProps) {
     return withTime;
   });
 
+  const mentionCandidates = createMemo(() =>
+    filterMentionCandidates(pendingContextRefs(), mentionQuery()),
+  );
+
   createEffect(() => {
     timelineItems();
     isStreaming();
@@ -190,6 +202,9 @@ export function ChatPanel(props: ChatPanelProps) {
     const onDocClick = (e: MouseEvent) => {
       if (attachMenuOpen() && attachRef && !attachRef.contains(e.target as Node)) {
         setAttachMenuOpen(false);
+      }
+      if (mentionOpen() && mentionMenuRef && !mentionMenuRef.contains(e.target as Node)) {
+        setMentionOpen(false);
       }
     };
     document.addEventListener("click", onDocClick);
@@ -243,6 +258,31 @@ export function ChatPanel(props: ChatPanelProps) {
   }
 
   function onKey(e: KeyboardEvent) {
+    if (e.isComposing) return;
+    if (mentionOpen()) {
+      const cands = mentionCandidates();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setMentionOpen(false);
+        return;
+      }
+      if (cands.length > 0 && e.key === "ArrowDown") {
+        e.preventDefault();
+        setMentionIndex((i) => (i + 1) % cands.length);
+        return;
+      }
+      if (cands.length > 0 && e.key === "ArrowUp") {
+        e.preventDefault();
+        setMentionIndex((i) => (i - 1 + cands.length) % cands.length);
+        return;
+      }
+      if (cands.length > 0 && (e.key === "Enter" || e.key === "Tab")) {
+        e.preventDefault();
+        const ref = cands[mentionIndex()];
+        if (ref) insertMention(ref);
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       send();
@@ -254,6 +294,33 @@ export function ChatPanel(props: ChatPanelProps) {
     ta.style.height = "auto";
     ta.style.height = `${Math.min(ta.scrollHeight, 120)}px`;
     setText(ta.value);
+    const trigger = detectAtTrigger(ta.value, ta.selectionStart ?? ta.value.length);
+    if (trigger.active) {
+      setMentionOpen(true);
+      setMentionQuery(trigger.query);
+      setMentionIndex(0);
+    } else {
+      setMentionOpen(false);
+    }
+  }
+
+  function insertMention(ref: ContextRefPayload) {
+    const ta = taRef;
+    if (!ta) return;
+    const val = text();
+    const trigger = detectAtTrigger(val, ta.selectionStart ?? val.length);
+    if (!trigger.active) return;
+    const { newText, cursorAfter } = buildMentionInsert(ref, trigger.atPos, ta.selectionStart ?? val.length, val);
+    setText(newText);
+    addContextRef(ref);
+    addInlineMention(ref.path);
+    setMentionOpen(false);
+    requestAnimationFrame(() => {
+      ta.focus();
+      ta.setSelectionRange(cursorAfter, cursorAfter);
+      ta.style.height = "auto";
+      ta.style.height = `${Math.min(ta.scrollHeight, 120)}px`;
+    });
   }
 
   async function pickContextRef(kind: ContextRefPayload["kind"]) {
@@ -412,6 +479,9 @@ export function ChatPanel(props: ChatPanelProps) {
                         </>
                       )}
                     </Show>
+                    <Show when={!isStreaming()}>
+                      <MessageFeedback message={m} disabled={props.sending()} />
+                    </Show>
                   </div>
                 </div>
               );
@@ -520,15 +590,27 @@ export function ChatPanel(props: ChatPanelProps) {
               </For>
             </div>
           </Show>
-          <textarea
-            ref={taRef}
-            rows={1}
-            placeholder="补充指示，或描述新的起草需求……"
-            value={text()}
-            onInput={grow}
-            onKeyDown={onKey}
-            disabled={props.sending()}
-          />
+          <div class="textarea-wrap">
+            <textarea
+              ref={taRef}
+              rows={1}
+              placeholder="补充指示，或描述新的起草需求……"
+              value={text()}
+              onInput={grow}
+              onKeyDown={onKey}
+              disabled={props.sending()}
+            />
+            <Show when={mentionOpen() && pendingContextRefs().length > 0}>
+              <div class="mention-wrap" ref={mentionMenuRef}>
+                <MentionMenu
+                  candidates={mentionCandidates()}
+                  selectedIndex={mentionIndex()}
+                  onSelect={insertMention}
+                  onDismiss={() => setMentionOpen(false)}
+                />
+              </div>
+            </Show>
+          </div>
           <div class="input-row">
             <div class="attach-wrap" ref={attachRef}>
               <button

@@ -1,5 +1,6 @@
 import type {
   Article,
+  ArticleBlock,
   ArticleNote,
   CitationCard,
   CitationGroups,
@@ -108,6 +109,68 @@ function isHorizontalRule(line: string): boolean {
   return /^-{3,}$|^\*{3,}$|^_{3,}$/.test(line.trim());
 }
 
+const MARKDOWN_TABLE_LINE_RE = /^\s*\|.+\|\s*$/;
+const MARKDOWN_TABLE_SEP_RE = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/;
+
+function isMarkdownTableLine(line: string): boolean {
+  const trimmed = line.trim();
+  return MARKDOWN_TABLE_LINE_RE.test(trimmed) || MARKDOWN_TABLE_SEP_RE.test(trimmed);
+}
+
+/** Split section body into prose runs and GFM table blocks. */
+export function splitMarkdownBlocks(
+  content: string,
+): Array<{ kind: "prose"; text: string } | { kind: "table"; markdown: string }> {
+  const blocks: Array<
+    { kind: "prose"; text: string } | { kind: "table"; markdown: string }
+  > = [];
+  let proseBuf: string[] = [];
+  let tableBuf: string[] = [];
+
+  const flushProse = () => {
+    const text = proseBuf.join("\n").trim();
+    if (text) blocks.push({ kind: "prose", text });
+    proseBuf = [];
+  };
+  const flushTable = () => {
+    const markdown = tableBuf.join("\n").trim();
+    if (markdown) blocks.push({ kind: "table", markdown });
+    tableBuf = [];
+  };
+
+  for (const raw of content.split(/\r?\n/)) {
+    if (!raw.trim()) {
+      if (tableBuf.length) flushTable();
+      else if (proseBuf.length) proseBuf.push("");
+      continue;
+    }
+    if (isMarkdownTableLine(raw)) {
+      if (proseBuf.length) flushProse();
+      tableBuf.push(raw.trimEnd());
+    } else {
+      if (tableBuf.length) flushTable();
+      proseBuf.push(raw);
+    }
+  }
+  flushTable();
+  flushProse();
+  return blocks;
+}
+
+function articleBlocksFromContent(content: string): ArticleBlock[] {
+  const blocks: ArticleBlock[] = [];
+  for (const block of splitMarkdownBlocks(content)) {
+    if (block.kind === "table") {
+      blocks.push({ kind: "table", markdown: block.markdown });
+      continue;
+    }
+    for (const para of textToParagraphs(block.text)) {
+      if (para.length) blocks.push({ kind: "para", segments: para });
+    }
+  }
+  return blocks;
+}
+
 function isParagraphStart(line: string): boolean {
   return (
     /^(?:[一二三四五六七八九十百零\d]+[、.．]|[（(][一二三四五六七八九十百零\d]+[）)]|第[一二三四五六七八九十百零\d]+[章节条款])/.test(line) ||
@@ -170,10 +233,14 @@ export function modelToArticles(model: LegalDocumentModel): Article[] {
   for (const section of model.sections) {
     if (section.clauses?.length) {
       for (const clause of section.clauses) {
+        const blocks = articleBlocksFromContent(clause.text);
         articles.push({
           id: clause.id,
           title: normalizedArticleTitle(clause.title ?? section.heading ?? clause.id),
-          paras: textToParagraphs(clause.text),
+          paras: blocks
+            .filter((b): b is { kind: "para"; segments: TextSegment[] } => b.kind === "para")
+            .map((b) => b.segments),
+          blocks: blocks.length > 0 ? blocks : undefined,
           note: riskNote(clause.risk_level),
         });
       }
@@ -181,10 +248,14 @@ export function modelToArticles(model: LegalDocumentModel): Article[] {
       const skipRecital =
         section.heading?.includes("鉴于") || section.heading?.includes("前言");
       if (!skipRecital) {
+        const blocks = articleBlocksFromContent(section.content);
         articles.push({
           id: section.id ?? `section-${articles.length + 1}`,
           title: normalizedArticleTitle(section.heading ?? `第${cnNum(articles.length + 1)}条`),
-          paras: textToParagraphs(section.content),
+          paras: blocks
+            .filter((b): b is { kind: "para"; segments: TextSegment[] } => b.kind === "para")
+            .map((b) => b.segments),
+          blocks: blocks.length > 0 ? blocks : undefined,
         });
       }
     }
@@ -260,6 +331,104 @@ const SECTION_HEADING_RE =
 
 const NUMBERED_ARTICLE_RE = /^第[一二三四五六七八九十百零\d]+[条章节款][、.．：:\s]*(.*)$/;
 
+/** Generic draft output contract — industry-agnostic envelope from the agent. */
+export interface DraftOutputEnvelope {
+  /** Left chat bubble: process notes, research, citations summary, etc. */
+  assistantMarkdown: string;
+  /** Structured document JSON when the model followed the envelope contract. */
+  documentJson: string | null;
+  /** Legacy plain-markdown document body for right-side preview fallback. */
+  documentMarkdown: string;
+  /** True when the reply contained an explicit assistant_notes + document envelope. */
+  hasEnvelope: boolean;
+}
+
+function looksLikeDraftEnvelope(obj: Record<string, unknown>): boolean {
+  const doc = obj.document;
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return false;
+  const d = doc as Record<string, unknown>;
+  return typeof d.title === "string" && Array.isArray(d.sections);
+}
+
+function extractJsonObject(text: string): Record<string, unknown> | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+
+  const fenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidates = fenceMatch?.[1] ? [fenceMatch[1].trim(), trimmed] : [trimmed];
+
+  for (const candidate of candidates) {
+    const start = candidate.indexOf("{");
+    if (start === -1) continue;
+
+    let depth = 0;
+    for (let i = start; i < candidate.length; i++) {
+      const ch = candidate[i];
+      if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          try {
+            const obj = JSON.parse(candidate.slice(start, i + 1)) as Record<string, unknown>;
+            if (obj && typeof obj === "object") return obj;
+          } catch {
+            /* try next slice */
+          }
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+/** Parse the generic draft envelope; legacy plain markdown/JSON falls back gracefully. */
+export function extractDraftOutputEnvelope(text: string): DraftOutputEnvelope {
+  const cleaned = sanitizeLlmDocumentContent(text);
+  if (!cleaned) {
+    return {
+      assistantMarkdown: "",
+      documentJson: null,
+      documentMarkdown: "",
+      hasEnvelope: false,
+    };
+  }
+
+  const obj = extractJsonObject(cleaned);
+  if (obj && looksLikeDraftEnvelope(obj)) {
+    const notes =
+      typeof obj.assistant_notes === "string"
+        ? obj.assistant_notes.trim()
+        : typeof obj.assistantNotes === "string"
+          ? obj.assistantNotes.trim()
+          : "";
+    const documentJson = JSON.stringify(obj.document);
+    return {
+      assistantMarkdown: notes,
+      documentJson,
+      documentMarkdown: "",
+      hasEnvelope: true,
+    };
+  }
+
+  const legacyJson = extractLegalDocumentJson(cleaned);
+  if (legacyJson) {
+    return {
+      assistantMarkdown: "",
+      documentJson: legacyJson,
+      documentMarkdown: "",
+      hasEnvelope: false,
+    };
+  }
+
+  return {
+    assistantMarkdown: "",
+    documentJson: null,
+    documentMarkdown: cleaned,
+    hasEnvelope: false,
+  };
+}
+
 /** Model sometimes leaks tool-call markup into plain text — never show as document body. */
 export function containsToolLeakage(text: string): boolean {
   return TOOL_LEAK_RE.test(text);
@@ -285,8 +454,8 @@ export function sanitizeLlmDocumentContent(text: string): string {
   );
   s = s.replace(/^#{1,3}\s*第[一二三四五六七八九十\d]+步[^\n]*\n?/gm, "");
   s = s.replace(/^.*(?:DSML|toolalls|parameter\s+name\s*=|invoke\s+name\s*=|<\|)[^\n]*\n?/gim, "");
-  s = s.replace(/<\/?[a-zA-Z_:][^>\n]*>/g, "");
-  s = s.replace(/\|\|+/g, "|");
+  // Only strip known tool-leak XML tags, not legitimate HTML in legal docs.
+  s = s.replace(/<\/?(?:tool_calls?|invoke|parameter|function_call|dsml)[^>\n]*>/gi, "");
 
   return s.replace(/\n{3,}/g, "\n\n").trim();
 }
@@ -301,7 +470,9 @@ export function looksLikeLegalProse(text: string): boolean {
 }
 
 export function isPublishableDocument(text: string): boolean {
-  const cleaned = sanitizeLlmDocumentContent(text);
+  const envelope = extractDraftOutputEnvelope(text);
+  if (envelope.documentJson) return true;
+  const cleaned = envelope.documentMarkdown;
   if (cleaned.length < 120) return false;
   if (containsToolLeakage(cleaned)) return false;
   if (extractLegalDocumentJson(cleaned)) return true;
@@ -454,6 +625,25 @@ function sectionsFromMarkdownBody(
           content: lines.map(stripMarkdownLineNoise).join("\n").trim(),
         },
       ];
+}
+
+/** Drop process narration before the first H1 — evidence reports must start at their title. */
+export function stripReportPreamble(markdown: string): string {
+  const match = markdown.match(/^#\s+.+$/m);
+  if (!match || match.index === undefined || match.index === 0) return markdown;
+  return markdown.slice(match.index).trimStart();
+}
+
+/** Display title for a markdown evidence report (first H1, else the mode label). */
+export function markdownReportTitle(markdown: string, fallbackLabel?: string): string {
+  const h1 = markdown.match(/^#\s+(.+)$/m);
+  if (h1) {
+    const title = cleanHeading(h1[1]);
+    if (title) return title;
+  }
+  const fb = fallbackLabel?.trim();
+  if (fb && !isInstructionLikeTitle(fb)) return fb;
+  return "案卷分析报告";
 }
 
 /** Build a preview model from plain-markdown LLM output when JSON is absent. */

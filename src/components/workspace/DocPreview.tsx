@@ -1,7 +1,10 @@
 import { For, Show } from "solid-js";
 import { save } from "@tauri-apps/plugin-dialog";
-import type { Article } from "../../types/legal";
-import { cnNum } from "../../utils/legalDocument";
+import { SolidMarkdown } from "solid-markdown";
+import remarkGfm from "remark-gfm";
+import type { Article, ArticleBlock, CitationCard } from "../../types/legal";
+import { cnNum, markdownReportTitle } from "../../utils/legalDocument";
+import { auditChecklistMarkdown } from "../../utils/citationAudit";
 import { useConversation } from "../../stores/conversation";
 import { generateDocx } from "../../services/api";
 import { renderSegs } from "../../utils/renderSegs";
@@ -22,6 +25,7 @@ export interface DocPreviewProps {
 export function DocPreview(props: DocPreviewProps) {
   const {
     articles,
+    citationGroups,
     docMeta,
     docMode,
     setDocMode,
@@ -31,25 +35,49 @@ export function DocPreview(props: DocPreviewProps) {
     documentVersion,
     activeConversationId,
     isStreaming,
+    workspaceModeLabel,
   } = useConversation();
 
-  const hasDocument = () => legalDocument() !== null && articles().length > 0;
+  const hasStructuredDoc = () => legalDocument() !== null && articles().length > 0;
+  // Evidence reports arrive as plain markdown with no structured model.
+  const hasMarkdownDoc = () => !hasStructuredDoc() && documentMarkdown().trim().length > 0;
+  const hasDocument = () => hasStructuredDoc() || hasMarkdownDoc();
   const isDrafting = () => isStreaming() && !hasDocument();
   const meta = () => docMeta();
+  const docTitle = () =>
+    meta().title ||
+    (hasMarkdownDoc()
+      ? markdownReportTitle(documentMarkdown(), workspaceModeLabel())
+      : "法律文书");
+  /** Cards carrying verification info — the 引用核验清单 under markdown reports. */
+  const auditCards = () =>
+    [...citationGroups().law, ...citationGroups().case].filter((c) => c.verified);
+
+  const verifyMark = (c: CitationCard) =>
+    c.verified === "verified"
+      ? "✓ 已核验"
+      : c.verified === "retrieved"
+        ? "✓ 已检索"
+        : "⚠ 待律师复核";
 
   function exec(cmd: string, val: string | null = null) {
     document.execCommand(cmd, false, val ?? undefined);
   }
 
   async function exportDocx() {
-    const doc = legalDocument();
     const markdown = documentMarkdown();
-    if (!doc || !markdown) {
+    if (!hasDocument() || !markdown.trim()) {
       props.onToast("暂无可导出的文书，请先完成起草");
       return;
     }
 
-    const defaultName = `${doc.title || "法律文书"}.docx`;
+    const title = legalDocument()?.title || docTitle();
+    // generate_docx renders `title` as its own heading — drop a duplicate leading H1.
+    const body =
+      markdown.replace(/^\s*#\s+(.+)(\r?\n)+/, (match, h1: string) =>
+        h1.replace(/\*\*/g, "").trim() === title ? "" : match,
+      ) + auditChecklistMarkdown(citationGroups());
+    const defaultName = `${title}.docx`;
     const path = await save({
       defaultPath: defaultName,
       filters: [{ name: "Word 文档", extensions: ["docx"] }],
@@ -58,8 +86,8 @@ export function DocPreview(props: DocPreviewProps) {
 
     try {
       await generateDocx({
-        title: doc.title,
-        content_markdown: markdown,
+        title,
+        content_markdown: body,
         output_path: path,
         conversation_id: activeConversationId() ?? undefined,
       });
@@ -78,10 +106,15 @@ export function DocPreview(props: DocPreviewProps) {
     props.onToast(`当前为第 ${ver} 稿`);
   }
 
+  function articleBodyBlocks(a: Article): ArticleBlock[] {
+    if (a.blocks?.length) return a.blocks;
+    return a.paras.map((segments) => ({ kind: "para" as const, segments }));
+  }
+
   return (
     <div class="doc">
       <div class="doc-tb">
-        <span class="doc-title">{meta().title || "法律文书"}</span>
+        <span class="doc-title">{docTitle()}</span>
         <Show when={documentVersion() > 0}>
           <span class="ver-pill">第 {documentVersion()} 稿</span>
         </Show>
@@ -98,7 +131,7 @@ export function DocPreview(props: DocPreviewProps) {
             type="button"
             class={docMode() === "edit" ? "on" : ""}
             onClick={() => setDocMode("edit")}
-            disabled={!hasDocument()}
+            disabled={!hasStructuredDoc()}
           >
             编辑
           </button>
@@ -140,6 +173,38 @@ export function DocPreview(props: DocPreviewProps) {
             </Show>
           }
         >
+          <Show
+            when={hasStructuredDoc()}
+            fallback={
+              <div class="sheet md-sheet" ref={props.sheetRef}>
+                <div class="md-doc">
+                  <SolidMarkdown remarkPlugins={[remarkGfm]}>
+                    {documentMarkdown()}
+                  </SolidMarkdown>
+                </div>
+                <Show when={auditCards().length > 0}>
+                  <div class="md-audit">
+                    <div class="md-audit-h">引用核验清单</div>
+                    <For each={auditCards()}>
+                      {(c) => (
+                        <button
+                          type="button"
+                          class={`md-audit-item ${c.verified ?? ""}`}
+                          onClick={() => props.onCite(c.key)}
+                        >
+                          <span class={`mk ${c.verified ?? ""}`}>{verifyMark(c)}</span>
+                          <span class="ttl">{c.title}</span>
+                          <Show when={c.tier}>
+                            <span class="tier">{c.tier}</span>
+                          </Show>
+                        </button>
+                      )}
+                    </For>
+                  </div>
+                </Show>
+              </div>
+            }
+          >
           <Show when={docMode() === "edit"}>
             <div class="edit-toolbar">
               <button type="button" onMouseDown={(e) => { e.preventDefault(); exec("bold"); }}>
@@ -212,16 +277,24 @@ export function DocPreview(props: DocPreviewProps) {
                       <span class="num">第{cnNum(i() + 1)}条</span>
                       {a.title}
                     </h3>
-                    <For each={a.paras}>
-                      {(para) => (
-                        <p>
-                          {renderSegs(para, {
-                            sheet: true,
-                            onCite: props.onCite,
-                            onRisk: props.onRisk,
-                          })}
-                        </p>
-                      )}
+                    <For each={articleBodyBlocks(a)}>
+                      {(block) =>
+                        block.kind === "table" ? (
+                          <div class="md-block">
+                            <SolidMarkdown remarkPlugins={[remarkGfm]}>
+                              {block.markdown}
+                            </SolidMarkdown>
+                          </div>
+                        ) : (
+                          <p>
+                            {renderSegs(block.segments, {
+                              sheet: true,
+                              onCite: props.onCite,
+                              onRisk: props.onRisk,
+                            })}
+                          </p>
+                        )
+                      }
                     </For>
                     <Show when={a.note}>
                       <div class="doc-note" contentEditable={false}>
@@ -242,6 +315,7 @@ export function DocPreview(props: DocPreviewProps) {
               </For>
             </div>
           </div>
+          </Show>
         </Show>
       </div>
     </div>

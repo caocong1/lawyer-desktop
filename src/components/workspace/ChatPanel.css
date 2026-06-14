@@ -251,3 +251,15 @@
     animation: none;
   }
 }
+
+/* @ mention autocomplete dropdown in chat panel */
+.textarea-wrap {
+  position: relative;
+}
+
+.textarea-wrap .mention-wrap {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+}

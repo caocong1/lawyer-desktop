@@ -30,3 +30,192 @@
   font-size: 12.5px;
   opacity: 0.75;
 }
+
+/* Markdown evidence report (诉讼方案 / 案情分析) — no structured article model. */
+.sheet .md-doc {
+  font-family: var(--serif);
+  color: var(--sheet-ink-2);
+  font-size: 13.5px;
+  line-height: 1.95;
+  overflow-x: auto;
+}
+
+.sheet .md-doc h1 {
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: 22px;
+  letter-spacing: 0.12em;
+  text-align: center;
+  color: var(--sheet-ink);
+  margin: 0 0 10px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--sheet-line);
+}
+
+.sheet .md-doc h2 {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--sheet-ink);
+  margin: 26px 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--sheet-line);
+}
+
+.sheet .md-doc h3 {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--sheet-ink);
+  margin: 18px 0 8px;
+}
+
+.sheet .md-doc h3::before {
+  content: "§ ";
+  color: var(--gold);
+}
+
+.sheet .md-doc p {
+  margin: 0 0 10px;
+  text-align: justify;
+}
+
+.sheet .md-doc ul,
+.sheet .md-doc ol {
+  padding-left: 1.5em;
+  margin: 0 0 10px;
+}
+
+.sheet .md-doc li {
+  margin-bottom: 4px;
+}
+
+.sheet .md-doc blockquote {
+  margin: 0 0 12px;
+  padding: 8px 14px;
+  border-left: 3px solid var(--gold);
+  background: var(--accent-soft);
+  border-radius: 0 8px 8px 0;
+}
+
+.sheet .md-doc blockquote p {
+  margin: 0;
+}
+
+.sheet .md-doc table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 14px;
+  font-size: 12.5px;
+}
+
+.sheet .md-block {
+  margin: 0 0 14px;
+  overflow-x: auto;
+}
+
+.sheet .md-block table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.sheet .md-doc th,
+.sheet .md-doc td,
+.sheet .md-block th,
+.sheet .md-block td {
+  border: 1px solid var(--sheet-line);
+  padding: 6px 9px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.sheet .md-doc th,
+.sheet .md-block th {
+  color: var(--sheet-ink);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--sheet-bg));
+}
+
+.sheet .md-doc code {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  background: var(--accent-soft);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.sheet .md-doc hr {
+  border: none;
+  height: 1px;
+  background: var(--sheet-line);
+  margin: 18px 0;
+}
+
+.sheet .md-doc strong {
+  color: var(--sheet-ink);
+}
+
+/* 引用核验清单 — appended below markdown reports */
+.sheet .md-audit {
+  margin-top: 26px;
+  padding-top: 16px;
+  border-top: 1px solid var(--sheet-line);
+}
+
+.sheet .md-audit-h {
+  font-family: var(--serif);
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--sheet-ink);
+  margin-bottom: 10px;
+}
+
+.sheet .md-audit-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 7px;
+  padding: 5px 8px;
+  cursor: pointer;
+  font-family: var(--serif);
+  font-size: 12.5px;
+  color: var(--sheet-ink-2);
+}
+
+.sheet .md-audit-item:hover {
+  background: var(--accent-soft);
+}
+
+.sheet .md-audit-item .mk {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.sheet .md-audit-item .mk.verified {
+  color: var(--green, #1a7f4b);
+}
+
+.sheet .md-audit-item .mk.retrieved {
+  color: var(--accent);
+}
+
+.sheet .md-audit-item .mk.unverified {
+  color: var(--amber, #b45309);
+}
+
+.sheet .md-audit-item .ttl {
+  flex: 1;
+}
+
+.sheet .md-audit-item .tier {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--muted);
+  border: 1px solid var(--sheet-line);
+  border-radius: 5px;
+  padding: 0 5px;
+}

@@ -170,3 +170,15 @@
   background: var(--accent-soft);
   color: var(--accent);
 }
+
+/* @ mention autocomplete dropdown in home page */
+.starter-field {
+  position: relative;
+}
+
+.starter-field .mention-wrap {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+}

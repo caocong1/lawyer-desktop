@@ -206,6 +206,48 @@ pub async fn execute_tool(
 
             Ok(format!("DOCX 已生成: {}", validated.display()))
         }
+        "legal_search" => {
+            let query = args
+                .get("query")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "query required".to_string())?;
+            let scope = crate::law_library::orchestrator::SearchScope::parse(
+                args.get("scope").and_then(|v| v.as_str()),
+            );
+            let k = args
+                .get("k")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(8)
+                .clamp(1, 20) as usize;
+            crate::law_library::orchestrator::legal_search(ctx.mcp, query, scope, k).await
+        }
+        "search_law" => {
+            let query = args
+                .get("query")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "query required".to_string())?;
+            let k = args
+                .get("k")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(8)
+                .clamp(1, 20) as usize;
+            crate::law_library::search_law(query, k)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        "get_law_article" => {
+            let law_name = args
+                .get("law_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "law_name required".to_string())?;
+            let article = args
+                .get("article")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "article required".to_string())?;
+            crate::law_library::get_article(law_name, article)
+                .await
+                .map_err(|e| e.to_string())
+        }
         "search_workspace" => {
             let root_id = primary_workspace_root(ctx)?;
             let query = args
@@ -487,11 +529,17 @@ pub fn build_messages(
     research_gate: Option<&str>,
     active_skill: Option<&SkillMetadata>,
     evidence_mode: bool,
+    retrieval_tools: &[String],
     history: Vec<ChatMessage>,
     user_content: String,
 ) -> Vec<ChatMessage> {
-    let system_prompt =
-        router::build_system_prompt(all_skills, research_gate, active_skill, evidence_mode);
+    let system_prompt = router::build_system_prompt(
+        all_skills,
+        research_gate,
+        active_skill,
+        evidence_mode,
+        retrieval_tools,
+    );
 
     let mut messages = vec![ChatMessage {
         reasoning_content: None,
@@ -521,9 +569,15 @@ pub fn update_system_prompt(
     research_gate: Option<&str>,
     active_skill: Option<&SkillMetadata>,
     evidence_mode: bool,
+    retrieval_tools: &[String],
 ) {
-    let system_prompt =
-        router::build_system_prompt(all_skills, research_gate, active_skill, evidence_mode);
+    let system_prompt = router::build_system_prompt(
+        all_skills,
+        research_gate,
+        active_skill,
+        evidence_mode,
+        retrieval_tools,
+    );
     if let Some(first) = messages.first_mut() {
         if first.role == "system" {
             first.content = system_prompt;

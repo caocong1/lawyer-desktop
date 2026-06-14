@@ -72,6 +72,7 @@ const CLASSIFIER_SYSTEM: &str = r#"你是墨律 Inkstatute 的任务路由器。
 3. 用户要求「读取目录/案件资料 + 诉讼方案/案情分析」→ evidence，不是 draft。
 4. 附加了案卷目录时，若用户在分析材料或写诉讼方案 → evidence；若明确要求起草某类格式文书 → draft。
 5. 不确定时选 chat，不要默认 draft。
+6. 消息以「以下是补充信息」开头说明用户在回答此前任务的澄清问题：附加目录为「是」时选 evidence；提到起草/文书时选 draft；不要选 chat。
 "#;
 
 pub async fn classify_agent_mode(

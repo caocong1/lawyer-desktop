@@ -1,9 +1,11 @@
-import { createEffect, createSignal, onCleanup } from "solid-js";
+import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { useConversation } from "../../stores/conversation";
+import { onLawUpdateAlert, onSkillsUpdated } from "../../services/api";
 import { ChatPanel } from "./ChatPanel";
 import { DocPreview } from "./DocPreview";
 import { CitationPanel } from "./CitationPanel";
 import { AgentTracePanel } from "./AgentTracePanel";
+import { SkillRefinementPanel } from "./SkillRefinementPanel";
 import { Icon } from "../icons/Icons";
 import "./Workspace.css";
 
@@ -27,8 +29,54 @@ export function Workspace(props: WorkspaceProps) {
   } = useConversation();
 
   const [sending, setSending] = createSignal(false);
+  const [refinementOpen, setRefinementOpen] = createSignal(false);
+  const isDevAdmin = import.meta.env.DEV;
   let docScrollRef: HTMLDivElement | undefined;
   let initGeneration = 0;
+
+  onMount(() => {
+    let disposed = false;
+    let unlistenLaw: (() => void) | undefined;
+    let unlistenSkills: (() => void) | undefined;
+
+    void onLawUpdateAlert((alert) => {
+      const names = alert.changes
+        .map((c) => `《${c.name}》${c.old_status}→${c.new_status}`)
+        .join("；");
+      const affected =
+        alert.affected_documents.length > 0
+          ? `，${alert.affected_documents.length} 份历史文书引用了相关法规，请复核`
+          : "";
+      props.onToast(`法规时效状态变化：${names}${affected}`);
+    }).then((u) => {
+      if (disposed) u();
+      else unlistenLaw = u;
+    });
+
+    void onSkillsUpdated((p) => {
+      props.onToast(`法律技能已更新到 v${p.version}`);
+    }).then((u) => {
+      if (disposed) u();
+      else unlistenSkills = u;
+    });
+
+    onCleanup(() => {
+      disposed = true;
+      unlistenLaw?.();
+      unlistenSkills?.();
+    });
+
+    if (isDevAdmin) {
+      const onKey = (ev: KeyboardEvent) => {
+        if (ev.ctrlKey && ev.shiftKey && ev.code === "KeyO") {
+          ev.preventDefault();
+          setRefinementOpen((v) => !v);
+        }
+      };
+      window.addEventListener("keydown", onKey);
+      onCleanup(() => window.removeEventListener("keydown", onKey));
+    }
+  });
 
   createEffect(() => {
     props.draftKey;
@@ -139,6 +187,9 @@ export function Workspace(props: WorkspaceProps) {
         onLocate={onLocate}
       />
       <AgentTracePanel />
+      <Show when={isDevAdmin}>
+        <SkillRefinementPanel open={refinementOpen()} onClose={() => setRefinementOpen(false)} />
+      </Show>
       <div class={`toast${props.toast ? " show" : ""}`}>
         <Icon name="check" />
         {props.toast}

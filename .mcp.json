@@ -7,6 +7,14 @@
         "LAW_DB_API_URL": "${LAW_DB_API_URL}",
         "LAW_DB_API_KEY": "${LAW_DB_API_KEY}"
       }
+    },
+    "wenshu": {
+      "command": "node",
+      "args": ["vendor/ai-for-china-legal/connectors/wenshu/index.js"],
+      "env": {
+        "WENSHU_API_URL": "${WENSHU_API_URL}",
+        "WENSHU_API_KEY": "${WENSHU_API_KEY}"
+      }
     }
   }
 }

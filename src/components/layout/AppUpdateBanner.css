@@ -1,0 +1,28 @@
+.app-update-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--molv-accent-soft, rgba(59, 130, 246, 0.12));
+  border-bottom: 1px solid var(--molv-border, rgba(0, 0, 0, 0.08));
+  font-size: 13px;
+}
+
+.app-update-banner button {
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--molv-accent, #2563eb);
+  background: var(--molv-accent, #2563eb);
+  color: #fff;
+  cursor: pointer;
+}
+
+.app-update-banner button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.app-update-error {
+  color: var(--molv-danger, #dc2626);
+  font-size: 12px;
+}

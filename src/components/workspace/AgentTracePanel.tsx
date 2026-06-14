@@ -417,6 +417,53 @@ function entrySpec(
         title: () => "最终回答生成",
         meta: <Chip tone="green">{fmtTokens(p.chars ?? 0)} 字</Chip>,
       };
+    case "citation_audit": {
+      const unverified = p.unverified ?? 0;
+      const itemLines = Array.isArray(p.items)
+        ? (p.items as Array<Record<string, string>>)
+            .map((it) => {
+              const mark =
+                it.status === "verified" ? "✓核验" : it.status === "retrieved" ? "✓检索" : "⚠待复核";
+              const name = it.source ? `《${it.source}》${it.reference}` : it.reference;
+              return `[${mark}] ${name}${it.tier ? `（${it.tier}）` : ""}${it.note ? ` — ${it.note}` : ""}`;
+            })
+            .join("\n")
+        : "";
+      return {
+        tone: (p.total ?? 0) === 0 ? "dim" : unverified > 0 ? "amber" : "green",
+        icon: "§",
+        title: () => ((p.total ?? 0) === 0 ? "引用核验 · 未检出引用" : "引用核验"),
+        meta: (
+          <>
+            <Chip tone="green">✓核验 {p.verified ?? 0}</Chip>
+            <Chip tone="dim">✓检索 {p.retrieved ?? 0}</Chip>
+            <Show when={unverified > 0}>
+              <Chip tone="amber">⚠待复核 {unverified}</Chip>
+            </Show>
+          </>
+        ),
+        body: itemLines ? <CodeBlock text={itemLines} maxCollapsed={600} /> : undefined,
+      };
+    }
+    case "followup_result":
+      return p.ok === false
+        ? {
+            tone: "amber",
+            icon: "✶",
+            title: () => "后续推荐生成失败（前端已用本地推荐兜底）",
+            meta: <Chip tone="amber">{p.reason ?? "error"}</Chip>,
+            body: p.error ? <div class="tp-error-text">{p.error}</div> : undefined,
+          }
+        : {
+            tone: "green",
+            icon: "✶",
+            title: () => "后续推荐生成",
+            meta: <Chip tone="green">{p.count ?? 0} 条</Chip>,
+            body:
+              Array.isArray(p.items) && p.items.length > 0 ? (
+                <CodeBlock text={(p.items as string[]).join("\n")} />
+              ) : undefined,
+          };
     case "rounds_exhausted":
       return {
         tone: "amber",

@@ -252,8 +252,50 @@ export async function listSkills(): Promise<SkillMetadata[]> {
   return invoke("list_skills");
 }
 
-export async function getMcpHealth(): Promise<Record<string, boolean>> {
+export interface McpServerHealth {
+  name: string;
+  online: boolean;
+  tool_count: number;
+  error?: string | null;
+}
+
+export async function getMcpHealth(): Promise<McpServerHealth[]> {
   return invoke("get_mcp_health");
+}
+
+export interface LawLibraryEntry {
+  file: string;
+  name: string;
+  aliases: string[];
+  doc_type?: string | null;
+  doc_number?: string | null;
+  status?: string | null;
+  article_count?: number | null;
+  source_url?: string | null;
+  text_verification?: string | null;
+  retrieved_at?: string | null;
+}
+
+export interface LawLibraryStatus {
+  root_path: string;
+  law_count: number;
+  article_count: number;
+  index_status?: {
+    root_id: string;
+    root_path: string;
+    status: string;
+    file_count: number;
+    chunk_count: number;
+  } | null;
+  laws: LawLibraryEntry[];
+}
+
+export async function getLawLibraryStatus(): Promise<LawLibraryStatus> {
+  return invoke("get_law_library_status");
+}
+
+export async function reindexLawLibrary(): Promise<{ file_count: number; chunk_count: number }> {
+  return invoke("reindex_law_library");
 }
 
 export async function parseLegalDocument(
@@ -325,6 +367,21 @@ export async function generateDocx(req: GenerateDocxRequest): Promise<string> {
   return invoke("generate_docx", { req });
 }
 
+export interface LawUpdateAlert {
+  changes: Array<{ name: string; old_status: string; new_status: string }>;
+  affected_documents: Array<{ id: string; title: string; law_name: string }>;
+  checked: number;
+}
+
+/** Regulation monitor: a library statute's 时效状态 changed online. */
+export function onLawUpdateAlert(
+  callback: (alert: LawUpdateAlert) => void,
+): Promise<() => void> {
+  return listen<LawUpdateAlert>("law-update-alert", (event) => {
+    callback(event.payload);
+  });
+}
+
 // Stream listener
 export function onChatStream(callback: (chunk: StreamChunk) => void): Promise<() => void> {
   return listen<StreamChunk>("chat-stream", (event) => {
@@ -339,4 +396,269 @@ export function onAgentTrace(
   return listen<AgentTraceEvent>("agent-trace", (event) => {
     callback(event.payload);
   });
+}
+
+// ---------------------------------------------------------------------------
+// SkillOpt / skill refinement (admin + lawyer feedback)
+// ---------------------------------------------------------------------------
+
+export interface SkillOptWeights {
+  human: number;
+  rubric: number;
+  cite: number;
+}
+
+export interface SkillOptSettings {
+  enabled: boolean;
+  gate: string;
+  auto_adopt: string;
+  weights: SkillOptWeights;
+  budget_tokens: number;
+  eval_data_roots: string[];
+  optimizer_provider?: unknown;
+}
+
+export interface SkillFeedbackRow {
+  id: string;
+  message_id: string;
+  conversation_id: string;
+  skill_name?: string | null;
+  plugin_name?: string | null;
+  rating: string;
+  comment?: string | null;
+  dimensions_json?: string | null;
+  created_at: string;
+}
+
+export interface EvalCaseRow {
+  id: string;
+  name: string;
+  target_skill?: string | null;
+  target_plugin?: string | null;
+  prompt: string;
+  materials_path?: string | null;
+  rubric?: string | null;
+  gold_reference_path?: string | null;
+  split: string;
+  origin: string;
+  active: boolean;
+  created_at: string;
+}
+
+export interface EvalRunRow {
+  id: string;
+  case_id: string;
+  skill_hash?: string | null;
+  score: number;
+  rubric_json?: string | null;
+  citation_json?: string | null;
+  tokens?: number | null;
+  latency_ms?: number | null;
+  created_at: string;
+}
+
+export interface SkillProposalRow {
+  id: string;
+  target_path: string;
+  base_hash?: string | null;
+  diff: string;
+  rationale?: string | null;
+  val_before?: number | null;
+  val_after?: number | null;
+  status: string;
+  created_at: string;
+  adopted_at?: string | null;
+}
+
+export interface SkillOptOverview {
+  feedback_count: number;
+  eval_case_count: number;
+  staged_proposals: number;
+  settings: SkillOptSettings;
+}
+
+export interface SkillOptProgressEvent {
+  stage: string;
+  message: string;
+  progress?: number | null;
+  detail?: unknown;
+}
+
+export interface SubmitFeedbackRequest {
+  message_id: string;
+  conversation_id: string;
+  skill_name?: string;
+  plugin_name?: string;
+  rating: "up" | "down";
+  comment?: string;
+  dimensions?: string[];
+}
+
+export async function getSkilloptSettings(): Promise<SkillOptSettings> {
+  return invoke("get_skillopt_settings");
+}
+
+export async function setSkilloptSettings(settings: SkillOptSettings): Promise<void> {
+  return invoke("set_skillopt_settings", { settings });
+}
+
+export async function submitMessageFeedback(req: SubmitFeedbackRequest): Promise<SkillFeedbackRow> {
+  return invoke("submit_message_feedback", { req });
+}
+
+export async function getMessageFeedback(conversationId: string): Promise<SkillFeedbackRow[]> {
+  return invoke("get_message_feedback", { conversationId });
+}
+
+export async function listAllFeedback(limit?: number): Promise<SkillFeedbackRow[]> {
+  return invoke("list_all_feedback", { limit });
+}
+
+export async function listEvalCases(): Promise<EvalCaseRow[]> {
+  return invoke("list_eval_cases");
+}
+
+export async function setEvalCaseActive(caseId: string, active: boolean): Promise<void> {
+  return invoke("set_eval_case_active", { caseId, active });
+}
+
+export async function seedEvalCases(): Promise<void> {
+  return invoke("seed_eval_cases");
+}
+
+export async function runEvalCase(caseId: string): Promise<{ run: EvalRunRow; answer_preview: string }> {
+  return invoke("run_eval_case", { caseId });
+}
+
+export async function listEvalRuns(caseId: string, limit?: number): Promise<EvalRunRow[]> {
+  return invoke("list_eval_runs", { caseId, limit });
+}
+
+export async function listProposals(status?: string): Promise<SkillProposalRow[]> {
+  return invoke("list_proposals", { status });
+}
+
+export async function adoptProposal(proposalId: string): Promise<string> {
+  return invoke("adopt_proposal", { proposalId });
+}
+
+export async function rejectProposal(proposalId: string): Promise<void> {
+  return invoke("reject_proposal", { proposalId });
+}
+
+export async function runSkillRefinement(options?: {
+  targetSkill?: string;
+  dryRun?: boolean;
+  rolloutsK?: number;
+  nights?: number;
+}): Promise<string[]> {
+  return invoke("run_skill_refinement", {
+    targetSkill: options?.targetSkill,
+    dryRun: options?.dryRun,
+    rolloutsK: options?.rolloutsK,
+    nights: options?.nights,
+  });
+}
+
+export async function mineEvalCases(): Promise<number> {
+  return invoke("mine_eval_cases");
+}
+
+export async function getSkilloptOverview(): Promise<SkillOptOverview> {
+  return invoke("get_skillopt_overview");
+}
+
+export function onSkillOptProgress(
+  callback: (event: SkillOptProgressEvent) => void,
+): Promise<() => void> {
+  return listen<SkillOptProgressEvent>("skillopt-progress", (event) => {
+    callback(event.payload);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Sync service (feedback outbox + skill/app updates)
+// ---------------------------------------------------------------------------
+
+export interface SyncSettings {
+  sync_base_url?: string | null;
+  has_api_key: boolean;
+  device_id: string;
+  feedback_upload_enabled: boolean;
+  upload_full_answer: boolean;
+  skills_channel: string;
+  app_update_channel: string;
+  skills_version?: string | null;
+}
+
+export interface SyncSettingsUpdate {
+  sync_base_url?: string | null;
+  sync_api_key?: string | null;
+  feedback_upload_enabled: boolean;
+  upload_full_answer: boolean;
+  skills_channel: string;
+  app_update_channel: string;
+}
+
+export interface SyncStatus {
+  settings: SyncSettings;
+  pending_outbox: number;
+}
+
+export async function getSyncSettings(): Promise<SyncSettings> {
+  return invoke("get_sync_settings");
+}
+
+export async function setSyncSettings(update: SyncSettingsUpdate): Promise<void> {
+  return invoke("set_sync_settings", { update });
+}
+
+export async function getSyncStatus(): Promise<SyncStatus> {
+  return invoke("get_sync_status_cmd");
+}
+
+export async function flushFeedbackOutbox(): Promise<number> {
+  return invoke("flush_feedback_outbox");
+}
+
+export async function testSyncConnection(): Promise<void> {
+  return invoke("test_sync_connection");
+}
+
+export function onSkillsUpdated(
+  callback: (payload: { version: string }) => void,
+): Promise<() => void> {
+  return listen<{ version: string }>("skills-updated", (event) => {
+    callback(event.payload);
+  });
+}
+
+export interface AppUpdateInfo {
+  available: boolean;
+  version?: string;
+  body?: string;
+}
+
+export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
+  try {
+    const { check } = await import("@tauri-apps/plugin-updater");
+    const update = await check();
+    if (!update) return { available: false };
+    return {
+      available: true,
+      version: update.version,
+      body: update.body ?? undefined,
+    };
+  } catch {
+    return { available: false };
+  }
+}
+
+export async function installAppUpdate(): Promise<void> {
+  const { check } = await import("@tauri-apps/plugin-updater");
+  const { relaunch } = await import("@tauri-apps/plugin-process");
+  const update = await check();
+  if (!update) return;
+  await update.downloadAndInstall();
+  await relaunch();
 }

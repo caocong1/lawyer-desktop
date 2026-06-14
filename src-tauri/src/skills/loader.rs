@@ -158,23 +158,112 @@ fn parse_skill_frontmatter(
 
 /// Load research-gate skill content from skills root if present.
 pub async fn load_research_gate(skills_root: &Path) -> Option<String> {
+    // The canonical location is shared/research-gate/SKILL.md (the shared dir
+    // has no skills/ subdir, so the generic skill scan never finds it).
     let candidates = [
+        skills_root.join("shared/research-gate/SKILL.md"),
         skills_root.join("shared/skills/research-gate/SKILL.md"),
         skills_root.join("research-gate/skills/research-gate/SKILL.md"),
     ];
 
+    let mut gate: Option<String> = None;
     for path in &candidates {
         if path.exists() {
             if let Ok(content) = fs::read_to_string(path).await {
-                return Some(content);
+                gate = Some(content);
+                break;
             }
         }
     }
 
-    // Scan all plugins for research-gate skill
-    let skills = scan_skills_dir(skills_root).await.ok()?;
-    skills
-        .into_iter()
-        .find(|s| s.name == "research-gate")
-        .map(|s| s.full_content)
+    if gate.is_none() {
+        // Scan all plugins; the skill's frontmatter name is cn-law-research-gate.
+        let skills = scan_skills_dir(skills_root).await.ok()?;
+        gate = skills
+            .into_iter()
+            .find(|s| s.name == "research-gate" || s.name == "cn-law-research-gate")
+            .map(|s| s.full_content);
+    }
+
+    let gate = strip_frontmatter(&gate?).to_string();
+    Some(with_source_policy_markers(skills_root, gate).await)
+}
+
+/// Drop YAML frontmatter — it is loader metadata, not prompt content.
+fn strip_frontmatter(content: &str) -> &str {
+    let trimmed = content.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("---") {
+        if let Some(end) = rest.find("\n---") {
+            return rest[end + 4..].trim_start();
+        }
+    }
+    content
+}
+
+/// Append the citation-marker vocabulary from source-policy.md so the model
+/// emits the exact markers ([L1-法规] … [待律师复核]) the audit pipeline expects.
+async fn with_source_policy_markers(skills_root: &Path, gate: String) -> String {
+    let policy_path = skills_root.join("shared/research-gate/references/source-policy.md");
+    let Ok(policy) = fs::read_to_string(&policy_path).await else {
+        return gate;
+    };
+    let Some(markers) = extract_section(&policy, "## 引用标记") else {
+        return gate;
+    };
+    format!(
+        "{}\n\n## 引用标记（source-policy 摘录）\n{}\n",
+        gate.trim_end(),
+        markers.trim_end()
+    )
+}
+
+/// Body of a `## heading` section, up to the next `## `.
+fn extract_section<'a>(content: &'a str, heading: &str) -> Option<&'a str> {
+    let start = content.find(heading)? + heading.len();
+    let rest = &content[start..];
+    let end = rest.find("\n## ").unwrap_or(rest.len());
+    Some(&rest[..end])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    fn temp_skills_root() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("lawyer-skills-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("shared/research-gate/references")).unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn loads_gate_from_shared_research_gate_dir() {
+        let root = temp_skills_root();
+        std::fs::write(
+            root.join("shared/research-gate/SKILL.md"),
+            "---\nname: cn-law-research-gate\ndescription: x\n---\n\n# 中国法研究闸门\n\n## 强制工作流\n正文",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("shared/research-gate/references/source-policy.md"),
+            "# 引用策略\n\n## 引用标记\n\n| 标记 | 含义 |\n|---|---|\n| `[L1-法规]` | 全文 |\n\n## 禁止引用\n略",
+        )
+        .unwrap();
+
+        let gate = load_research_gate(&root).await.expect("gate should load");
+        assert!(gate.contains("强制工作流"));
+        assert!(gate.contains("[L1-法规]"), "source-policy markers appended");
+        assert!(!gate.contains("禁止引用"), "only the marker section is appended");
+        assert!(!gate.starts_with("---"), "frontmatter stripped");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[tokio::test]
+    async fn returns_none_when_gate_absent() {
+        let root = std::env::temp_dir().join(format!("lawyer-skills-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        assert!(load_research_gate(&root).await.is_none());
+        std::fs::remove_dir_all(&root).ok();
+    }
 }

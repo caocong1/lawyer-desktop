@@ -17,6 +17,8 @@
     "sql:default",
     "dialog:default",
     "fs:default",
+    "updater:default",
+    "process:default",
     "mcp-bridge:default"
   ]
 }

@@ -60,15 +60,23 @@ pub async fn read_file_inner(file_path: &Path) -> Result<String, String> {
             }
         },
         "docx" => {
-            let size = tokio::fs::metadata(file_path)
-                .await
-                .map_err(|e| e.to_string())?
-                .len();
-            Ok(format!(
-                "[DOCX 文件: {} — {} bytes — DOCX 文本提取功能待实现]",
-                file_path.display(),
-                size
-            ))
+            let path = file_path.to_path_buf();
+            tokio::task::spawn_blocking(move || {
+                crate::workspace::parser::extract_docx_text(&path).map(|text| {
+                    if text.len() > 50000 {
+                        format!(
+                            "{}...\n\n[DOCX 已截断，共 {} 字符]",
+                            &text[..50000],
+                            text.len()
+                        )
+                    } else {
+                        text
+                    }
+                })
+            })
+            .await
+            .map_err(|e| format!("DOCX read task failed: {}", e))?
+            .map_err(|e| format!("DOCX 提取失败: {}", e))
         }
         _ => match tokio::fs::read_to_string(file_path).await {
             Ok(content) => Ok(content),

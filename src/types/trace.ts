@@ -22,6 +22,8 @@ export type TraceKind =
   | "continuation"
   | "continuation_result"
   | "final_answer"
+  | "followup_result"
+  | "citation_audit"
   | "rounds_exhausted"
   | "stream_start"
   | "stream_delta"

@@ -53,6 +53,22 @@ const LEAK_ERROR_MESSAGE: &str =
     "**分析未完成：** 模型多次返回无法解析的工具调用残留，未能生成可读报告。\
 请重试，或在设置中更换支持标准工具调用的模型。";
 
+/// Recover workspace root hashes recorded as `root_id=<sha256-hex>` lines in
+/// earlier user-turn context blocks.
+fn extract_workspace_root_ids(text: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    for chunk in text.split("root_id=").skip(1) {
+        let id: String = chunk
+            .chars()
+            .take_while(|c| c.is_ascii_hexdigit())
+            .collect();
+        if id.len() == 64 && !ids.iter().any(|existing| existing == &id) {
+            ids.push(id);
+        }
+    }
+    ids
+}
+
 /// Extract Windows absolute paths from free-form user text (supports CJK path segments).
 fn extract_directory_paths(text: &str) -> Vec<String> {
     let mut paths = Vec::new();
@@ -204,13 +220,21 @@ pub async fn update_message_metadata(
 
 #[tauri::command]
 pub async fn generate_followup_prompts(
+    app: AppHandle,
     engine: State<'_, LlmEngine>,
     db: State<'_, Pool<Sqlite>>,
     req: GenerateFollowupPromptsRequest,
 ) -> Result<Vec<String>, String> {
+    let tracer = Tracer::new(&app, &req.conversation_id, &req.message_id);
     let provider = match engine.get_fast_provider().await {
         Ok(p) => p,
-        Err(_) => return Ok(Vec::new()),
+        Err(e) => {
+            tracer.emit(
+                "followup_result",
+                json!({ "ok": false, "reason": "no_fast_provider", "error": e.to_string() }),
+            );
+            return Ok(Vec::new());
+        }
     };
 
     let rows = db::queries::list_messages(&db, &req.conversation_id)
@@ -258,14 +282,41 @@ pub async fn generate_followup_prompts(
         stream: false,
     };
 
-    let response = provider.chat(&request).await.map_err(|e| e.to_string())?;
+    // One retry — the deepseek gateway intermittently fails short requests.
+    let response = match provider.chat(&request).await {
+        Ok(r) => Ok(r),
+        Err(first_err) => {
+            log::warn!("Followup prompt request failed, retrying: {}", first_err);
+            provider.chat(&request).await
+        }
+    };
+    let response = match response {
+        Ok(r) => r,
+        Err(e) => {
+            tracer.emit(
+                "followup_result",
+                json!({ "ok": false, "reason": "llm_error", "error": e.to_string() }),
+            );
+            return Err(e.to_string());
+        }
+    };
     let content = response
         .choices
         .first()
         .and_then(|c| c.message.as_ref())
         .map(|m| m.content.clone())
         .unwrap_or_default();
-    Ok(parse_followup_prompts(&content))
+    let items = parse_followup_prompts(&content);
+    tracer.emit(
+        "followup_result",
+        json!({
+            "ok": true,
+            "count": items.len(),
+            "items": items.clone(),
+            "raw_preview": preview(&content, 300),
+        }),
+    );
+    Ok(items)
 }
 
 fn build_classify_context(
@@ -472,13 +523,41 @@ pub async fn send_message(
         }
     }
 
-    let classify_ctx = build_classify_context(&req.content, req.context_refs.as_ref());
+    let history = load_conversation_history(&db, &req.conversation_id)
+        .await
+        .map_err(|e| turn_fail(&tracer, "history", e))?;
+    tracer.emit("history_loaded", json!({ "messages": history.len() }));
+
+    // Clarification answers and follow-up turns arrive without context_refs —
+    // recover the conversation's workspace bindings (recorded as `root_id=…`
+    // in earlier user-turn context blocks) so evidence tools and the
+    // classifier keep working after an ask_user pause.
+    let mut inherited_workspace = false;
+    if workspace_root_ids.is_empty() {
+        for msg in history.iter().rev() {
+            if msg.role != "user" {
+                continue;
+            }
+            let ids = extract_workspace_root_ids(&msg.content);
+            if !ids.is_empty() {
+                workspace_root_ids = ids;
+                inherited_workspace = true;
+                break;
+            }
+        }
+    }
+
+    let mut classify_ctx = build_classify_context(&req.content, req.context_refs.as_ref());
+    if inherited_workspace {
+        classify_ctx.has_directory_ref = true;
+    }
     tracer.emit(
         "classify_start",
         json!({
             "has_directory_ref": classify_ctx.has_directory_ref,
             "has_file_ref": classify_ctx.has_file_ref,
             "directory_aliases": classify_ctx.directory_aliases,
+            "inherited_workspace": inherited_workspace,
         }),
     );
     let classify_started = Instant::now();
@@ -503,11 +582,6 @@ pub async fn send_message(
 
     let _ = app.emit("agent-mode-classified", &classification);
 
-    let history = load_conversation_history(&db, &req.conversation_id)
-        .await
-        .map_err(|e| turn_fail(&tracer, "history", e))?;
-    tracer.emit("history_loaded", json!({ "messages": history.len() }));
-
     let tools = build_all_tools(&mcp, evidence_mode).await;
     {
         let (mcp_tools, builtin_tools): (Vec<String>, Vec<String>) = tools
@@ -525,12 +599,21 @@ pub async fn send_message(
         );
     }
 
+    // Tool names the prompt may legitimately reference for legal research —
+    // the mapping section only promises tools that exist this turn.
+    let retrieval_tool_names: Vec<String> = tools
+        .iter()
+        .map(|t| t.function.name.clone())
+        .filter(|n| crate::skills::router::is_retrieval_tool_name(n))
+        .collect();
+
     let history_count = history.len();
     let mut messages = build_messages(
         &all_skills,
         research_gate_ref,
         active_skill.as_ref(),
         evidence_mode,
+        &retrieval_tool_names,
         history,
         user_content.clone(),
     );
@@ -600,6 +683,8 @@ pub async fn send_message(
     let mut streamed = false;
     let mut leak_retries = 0usize;
     let mut leak_fallback = false;
+    // Retrieval evidence accumulated across all tool rounds for citation audit.
+    let mut turn_retrievals: Vec<(String, String)> = Vec::new();
 
     for round in 0..MAX_TOOL_ROUNDS {
         tracer.emit(
@@ -712,6 +797,7 @@ pub async fn send_message(
                     .await;
                 }
 
+                turn_retrievals.extend(batch.retrievals);
                 append_tool_results(&mut messages, assistant_msg, batch.results);
 
                 if active_skill.is_some() {
@@ -721,6 +807,7 @@ pub async fn send_message(
                         research_gate_ref,
                         active_skill.as_ref(),
                         evidence_mode,
+                        &retrieval_tool_names,
                     );
                 }
                 continue;
@@ -753,6 +840,7 @@ pub async fn send_message(
             let mut tool_msg = assistant_msg.clone();
             tool_msg.tool_calls = Some(embedded);
             tool_msg.content = String::new();
+            turn_retrievals.extend(batch.retrievals);
             append_tool_results(&mut messages, tool_msg, batch.results);
             if active_skill.is_some() {
                 update_system_prompt(
@@ -761,6 +849,7 @@ pub async fn send_message(
                     research_gate_ref,
                     active_skill.as_ref(),
                     evidence_mode,
+                    &retrieval_tool_names,
                 );
             }
             continue;
@@ -891,6 +980,7 @@ pub async fn send_message(
                     tool_calls: Some(embedded),
                     tool_call_id: None,
                 };
+                turn_retrievals.extend(batch.retrievals);
                 append_tool_results(&mut messages, tool_msg, batch.results);
                 continue;
             }
@@ -1065,7 +1155,41 @@ pub async fn send_message(
         full_response = sanitize_assistant_content(&full_response);
     }
 
+    // Citation audit: extract every legal citation from the answer and verify
+    // against the local law library + this turn's retrieval evidence.
+    let citation_audit = if full_response.is_empty() {
+        None
+    } else {
+        let audit = crate::citations::audit(&full_response, &turn_retrievals).await;
+        tracer.emit("citation_audit", json!(audit));
+        Some(audit)
+    };
+
     if !full_response.is_empty() {
+        let mut meta_obj = citation_audit
+            .as_ref()
+            .filter(|a| a.total > 0)
+            .map(|a| serde_json::json!({ "citation_audit": a }))
+            .unwrap_or_else(|| serde_json::json!({}));
+
+        if let Some(ref skill) = active_skill {
+            if let Some(obj) = meta_obj.as_object_mut() {
+                obj.insert(
+                    "active_skill".to_string(),
+                    serde_json::json!({
+                        "name": skill.name,
+                        "plugin_name": skill.plugin_name,
+                    }),
+                );
+            }
+        }
+
+        let metadata_json = if meta_obj.as_object().map(|o| !o.is_empty()).unwrap_or(false) {
+            Some(meta_obj.to_string())
+        } else {
+            None
+        };
+
         if let Err(e) = db::queries::save_message_with_id_and_metadata(
             &db,
             &message_id,
@@ -1074,7 +1198,7 @@ pub async fn send_message(
             &full_response,
             "[]",
             "[]",
-            None,
+            metadata_json.as_deref(),
         )
         .await
         {
@@ -1117,6 +1241,8 @@ fn turn_fail(tracer: &Tracer, stage: &str, msg: String) -> String {
 struct ToolBatch {
     results: Vec<(String, String)>,
     ask_user: Option<AskUserRequest>,
+    /// (tool name, result text) for retrieval tools — citation-audit evidence.
+    retrievals: Vec<(String, String)>,
 }
 
 async fn finish_ask_user_turn(
@@ -1197,6 +1323,7 @@ async fn run_traced_tool_calls(
 ) -> ToolBatch {
     let mut results = Vec::new();
     let mut ask_user = None;
+    let mut retrievals = Vec::new();
     for tc in tool_calls {
         let name = tc.function.name.as_str();
         let tool_kind = if McpManager::is_mcp_tool(name) {
@@ -1247,6 +1374,9 @@ async fn run_traced_tool_calls(
                         "result_preview": preview(&r, 3000),
                     }),
                 );
+                if crate::skills::router::is_retrieval_tool_name(name) {
+                    retrievals.push((name.to_string(), r.clone()));
+                }
                 r
             }
             Err(e) => {
@@ -1285,7 +1415,11 @@ async fn run_traced_tool_calls(
 
         results.push((tc.id.clone(), result));
     }
-    ToolBatch { results, ask_user }
+    ToolBatch {
+        results,
+        ask_user,
+        retrievals,
+    }
 }
 
 /// Collect the full answer, auto-continuing while the provider reports
@@ -1650,4 +1784,27 @@ pub async fn update_conversation_title(
     db::queries::update_conversation_title(&db, &conversation_id, &title)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recovers_root_ids_from_context_block() {
+        let hash = "a1b2c3d4".repeat(8);
+        let text = format!(
+            "@案件资料 (目录: C:\\案卷)\nworkspace 已索引：8 个文件，13 个 chunk。请使用 search_workspace 检索。root_id={}\n",
+            hash
+        );
+        assert_eq!(extract_workspace_root_ids(&text), vec![hash]);
+    }
+
+    #[test]
+    fn root_id_extraction_dedupes_and_rejects_partials() {
+        let hash = "f".repeat(64);
+        let text = format!("root_id={} root_id={} root_id=abc123", hash, hash);
+        assert_eq!(extract_workspace_root_ids(&text), vec![hash]);
+        assert!(extract_workspace_root_ids("无引用内容").is_empty());
+    }
 }

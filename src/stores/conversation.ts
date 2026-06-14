@@ -3,12 +3,19 @@ import type { AgentMode } from "../types/agentMode";
 import type { ContextRefPayload } from "../types/contextRefs";
 import type {
   Article,
+  CitationAudit,
   CitationGroups,
   DocMeta,
   LegalDocumentModel,
 } from "../types/legal";
 import {
+  auditSummaryLine,
+  auditToCitationGroups,
+  mergeAuditIntoGroups,
+} from "../utils/citationAudit";
+import {
   extractLegalDocumentJson,
+  extractDraftOutputEnvelope,
   isPublishableDocument,
   markdownToLegalDocument,
   modelToArticles,
@@ -16,8 +23,11 @@ import {
   modelToDocMeta,
   containsToolLeakage,
   sanitizeLlmDocumentContent,
+  stripReportPreamble,
 } from "../utils/legalDocument";
+import { fallbackFollowupSuggestions } from "../utils/followupSuggestions";
 import { mergeDirectoryRefs } from "../utils/evidenceFlow";
+import { resolveInlineMentions } from "../utils/mentions";
 import {
   getConversations,
   getMessages,
@@ -103,6 +113,10 @@ const [draftWorkflowActive, setDraftWorkflowActive] = createSignal(false);
 const [workflowByMessageId, setWorkflowByMessageId] = createSignal<Record<string, WorkflowState>>(
   {},
 );
+/** Backend citation audits keyed by message_id (from the trace channel). */
+const [citationAuditByMessageId, setCitationAuditByMessageId] = createSignal<
+  Record<string, CitationAudit>
+>({});
 
 const STREAM_WATCHDOG_MS = 5 * 60 * 1000;
 let streamWatchdog: ReturnType<typeof setTimeout> | null = null;
@@ -190,6 +204,15 @@ function markStep(
 }
 
 function traceToolLabel(name: string): { label: string; detail?: string } {
+  if (name.startsWith("mcp__")) {
+    if (/law|legal|fagui|statute|wenshu|case|judgment/i.test(name)) {
+      return { label: "检索法律法规与类案" };
+    }
+    return { label: "查询外部数据源" };
+  }
+  if (name === "legal_search") return { label: "聚合检索法律依据" };
+  if (name === "search_law") return { label: "检索本地法规库" };
+  if (name === "get_law_article") return { label: "核对法条原文" };
   if (name === "search_workspace") return { label: "查找相关材料" };
   if (name === "read_chunk") return { label: "查看相关材料" };
   if (name === "read_file" || name === "read_user_file") return { label: "查看文件内容" };
@@ -352,6 +375,17 @@ function applyTraceToWorkflow(workflow: WorkflowState, e: AgentTraceEvent): Work
         mode === "evidence" ? "撰写分析报告" : mode === "draft" ? "起草正文" : "生成答复";
       return upsertStep(workflow, "draft", "draft", label, "run", e.seq, undefined, e.ts_ms);
     }
+    case "citation_audit":
+      return upsertStep(
+        workflow,
+        "cite-audit",
+        "tool",
+        "核验引用来源",
+        "done",
+        e.seq,
+        undefined,
+        e.ts_ms,
+      );
     case "stream_done":
       return markStep(workflow, "draft", "done");
     case "error":
@@ -400,6 +434,7 @@ const [docMode, setDocMode] = createSignal<DocMode>("preview");
 const [justAddedId, setJustAddedId] = createSignal<string | null>(null);
 const [citeState, setCiteState] = createSignal<CiteState>({ open: false, tab: "law", key: null });
 const [pendingContextRefs, setPendingContextRefs] = createSignal<ContextRefPayload[]>([]);
+const [inlineMentionPaths, setInlineMentionPaths] = createSignal<string[]>([]);
 /** Per-path workspace index progress keyed by root_path. */
 const [workspaceIndexByPath, setWorkspaceIndexByPath] = createSignal<
   Record<
@@ -426,24 +461,47 @@ function clearDocumentState() {
   setCitationGroups(emptyCitations());
 }
 
-function applyDocumentModel(model: LegalDocumentModel, markdown: string, id: string | null) {
+type DocumentOrigin = "live" | "restore";
+
+function applyDocumentModel(
+  model: LegalDocumentModel,
+  markdown: string,
+  id: string | null,
+  origin: DocumentOrigin = "live",
+) {
   setLegalDocument(model);
   setDocumentMarkdown(markdown);
   setDocumentId(id);
-  setDocumentVersion((v) => v + 1);
+  // Restores re-run on every conversation switch — they must not inflate 第N稿.
+  setDocumentVersion((v) => (origin === "live" ? v + 1 : 1));
   setDocMeta(modelToDocMeta(model));
   setArticles(modelToArticles(model));
   setCitationGroups(modelToCitationGroups(model));
 }
 
-async function applyParsedDocument(jsonContent: string): Promise<boolean> {
+/** Evidence reports are plain markdown — clear stale structured docs so the latest output wins. */
+function applyMarkdownReport(markdown: string, origin: DocumentOrigin = "live") {
+  setLegalDocument(null);
+  setDocumentId(null);
+  setDocMeta(emptyDocMeta());
+  setArticles([]);
+  setCitationGroups(emptyCitations());
+  setDocumentMarkdown(markdown);
+  // Restores re-run on every conversation switch — they must not inflate 第N稿.
+  setDocumentVersion((v) => (origin === "live" ? v + 1 : 1));
+}
+
+async function applyParsedDocument(
+  jsonContent: string,
+  origin: DocumentOrigin = "live",
+): Promise<boolean> {
   const convId = activeConversationId();
   try {
     const res = await parseLegalDocument({
       json_content: jsonContent,
       conversation_id: convId ?? undefined,
     });
-    applyDocumentModel(res.document, res.markdown, res.document_id);
+    applyDocumentModel(res.document, res.markdown, res.document_id, origin);
     return true;
   } catch (e) {
     console.warn("解析法律文书 JSON 失败:", e);
@@ -451,18 +509,26 @@ async function applyParsedDocument(jsonContent: string): Promise<boolean> {
   }
 }
 
-async function tryApplyDocumentFromContent(content: string): Promise<boolean> {
+async function tryApplyDocumentFromContent(
+  content: string,
+  origin: DocumentOrigin = "live",
+): Promise<boolean> {
+  const envelope = extractDraftOutputEnvelope(content);
   if (!isPublishableDocument(content)) return false;
 
-  const cleaned = sanitizeLlmDocumentContent(content);
-  const json = extractLegalDocumentJson(cleaned) ?? extractLegalDocumentJson(content);
+  if (envelope.documentJson) {
+    return applyParsedDocument(envelope.documentJson, origin);
+  }
+
+  const cleaned = sanitizeLlmDocumentContent(envelope.documentMarkdown);
+  const json = extractLegalDocumentJson(cleaned);
   if (json) {
-    return applyParsedDocument(json);
+    return applyParsedDocument(json, origin);
   }
 
   const model = markdownToLegalDocument(cleaned, workspacePrompt());
   if (model) {
-    applyDocumentModel(model, cleaned, null);
+    applyDocumentModel(model, cleaned, null, origin);
     return true;
   }
 
@@ -474,16 +540,34 @@ async function restoreDocumentFromMessages() {
   for (const m of msgs) {
     if (m.role !== "assistant") continue;
     const meta = metadataForMessage(m);
-    if (meta?.content_hidden && meta.workflow?.mode === "evidence" && m.content.trim()) {
-      setDocumentMarkdown(sanitizeLlmDocumentContent(m.content));
+    // Clarification placeholder messages also carry content_hidden + mode —
+    // their workflow has a clarification; a real report's never does.
+    if (
+      meta?.content_hidden &&
+      meta.workflow?.mode === "evidence" &&
+      !meta.workflow?.clarification &&
+      m.content.trim()
+    ) {
+      applyMarkdownReport(
+        stripReportPreamble(sanitizeLlmDocumentContent(m.content)),
+        "restore",
+      );
+      if (meta.citation_audit) {
+        setCitationGroups(auditToCitationGroups(meta.citation_audit));
+      }
       return;
     }
-    if (await tryApplyDocumentFromContent(m.content)) {
+    if (meta?.workflow?.clarification) continue;
+    if (await tryApplyDocumentFromContent(m.content, "restore")) {
+      if (meta?.citation_audit) {
+        setCitationGroups(mergeAuditIntoGroups(citationGroups(), meta.citation_audit));
+      }
       if (
         m.content.length > 120 &&
         !meta?.display_content
       ) {
-        const display = draftCompletionSummary(
+        const display = draftDisplayContent(
+          extractDraftOutputEnvelope(m.content).assistantMarkdown,
           docMeta().title || workspacePrompt() || "法律文书",
         );
         setMessages((prev) =>
@@ -491,7 +575,12 @@ async function restoreDocumentFromMessages() {
             msg.id === m.id
               ? {
                   ...msg,
-                  metadata: buildMessageMetadata(meta?.workflow, display, true),
+                  metadata: buildMessageMetadata(
+                    meta?.workflow,
+                    display,
+                    true,
+                    meta?.citation_audit,
+                  ),
                 }
               : msg,
           ),
@@ -505,6 +594,12 @@ async function restoreDocumentFromMessages() {
 
 function draftCompletionSummary(title: string): string {
   return `已生成「${title}」草稿，正文见右侧文书预览。如有修改意见请继续补充。`;
+}
+
+function draftDisplayContent(assistantMarkdown: string, title: string): string {
+  const summary = draftCompletionSummary(title);
+  const notes = assistantMarkdown.trim();
+  return notes ? `${notes}\n\n---\n\n${summary}` : summary;
 }
 
 function evidenceCompletionSummary(title: string): string {
@@ -554,13 +649,53 @@ function buildMessageMetadata(
   workflow: WorkflowState | undefined,
   displayContent?: string,
   contentHidden?: boolean,
+  citationAudit?: CitationAudit,
 ): MessageMetadata | undefined {
-  if (!workflow && !displayContent && !contentHidden) return undefined;
+  if (!workflow && !displayContent && !contentHidden && !citationAudit) return undefined;
   return {
     workflow,
     display_content: displayContent,
     content_hidden: contentHidden,
+    citation_audit: citationAudit,
   };
+}
+
+/** Repopulate the citation panel from an audit, respecting the current doc kind. */
+function applyAuditToDocumentState(audit: CitationAudit) {
+  if (audit.total === 0) return;
+  if (legalDocument() !== null) {
+    setCitationGroups(mergeAuditIntoGroups(citationGroups(), audit));
+  } else if (documentMarkdown().trim()) {
+    setCitationGroups(auditToCitationGroups(audit));
+  }
+}
+
+/** Append the verification stats line once. */
+function appendAuditLine(text: string, audit: CitationAudit): string {
+  const line = auditSummaryLine(audit);
+  if (!line || text.includes("引用核验：")) return text;
+  return text ? `${text}\n\n${line}` : line;
+}
+
+/** The audit trace event may arrive after finishStreaming already persisted
+ *  metadata — apply it retroactively to the finalized message. */
+function applyLateCitationAudit(messageId: string, audit: CitationAudit) {
+  const msg = messages().find((m) => m.id === messageId);
+  if (!msg) return; // still streaming — finishStreaming picks it up
+  const meta = metadataForMessage(msg);
+  if (meta?.citation_audit) return; // already applied
+  if (audit.total === 0) return;
+
+  applyAuditToDocumentState(audit);
+  const display = appendAuditLine(meta?.display_content ?? messageDisplayContent(msg), audit);
+  const metadata: MessageMetadata = {
+    ...(meta ?? {}),
+    workflow: meta?.workflow ?? workflowForMessageId(messageId),
+    display_content: display,
+    citation_audit: audit,
+  };
+  attachMetadataToMessage(messageId, metadata);
+  persistMessageMetadata(messageId, metadata);
 }
 
 function attachMetadataToMessage(messageId: string, metadata: MessageMetadata) {
@@ -575,17 +710,47 @@ function attachMetadataToMessage(messageId: string, metadata: MessageMetadata) {
   }
 }
 
-function persistMessageMetadata(messageId: string, metadata: MessageMetadata, attempt = 0) {
-  void updateMessageMetadata(messageId, metadata).catch((e) => {
-    if (attempt < 5) {
-      setTimeout(
-        () => persistMessageMetadata(messageId, metadata, attempt + 1),
-        180 * (attempt + 1),
-      );
+// Writes are serialized per message so a retrying earlier snapshot can never
+// land after (and clobber) a newer one, e.g. the suggestions update.
+const metadataWriteChain = new Map<string, Promise<void>>();
+
+async function writeMetadataWithRetry(messageId: string, metadata: MessageMetadata) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await updateMessageMetadata(messageId, metadata);
       return;
+    } catch (e) {
+      if (attempt >= 5) {
+        console.warn("保存消息进度快照失败:", e);
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 180 * (attempt + 1)));
     }
-    console.warn("保存消息进度快照失败:", e);
-  });
+  }
+}
+
+function persistMessageMetadata(messageId: string, metadata: MessageMetadata) {
+  const prev = metadataWriteChain.get(messageId) ?? Promise.resolve();
+  metadataWriteChain.set(
+    messageId,
+    prev.then(() => writeMetadataWithRetry(messageId, metadata)),
+  );
+}
+
+function persistMessageFeedback(
+  messageId: string,
+  feedback: NonNullable<MessageMetadata["feedback"]>,
+) {
+  const msg = messages().find((m) => m.id === messageId);
+  const meta = msg ? metadataForMessage(msg) ?? {} : {};
+  const metadata: MessageMetadata = {
+    ...meta,
+    workflow: meta.workflow ?? workflowForMessageId(messageId),
+    citation_audit: meta.citation_audit,
+    feedback,
+  };
+  attachMetadataToMessage(messageId, metadata);
+  persistMessageMetadata(messageId, metadata);
 }
 
 function completeWorkflowSnapshot(messageId: string): WorkflowState | undefined {
@@ -631,6 +796,7 @@ function answerTextFromClarification(answers: ClarificationAnswer[]): string {
 async function attachFollowupSuggestions(messageId: string, summary: string) {
   const workflow = workflowForMessageId(messageId);
   if (!workflow || workflow.status === "waiting") return;
+  let clean: string[] = [];
   try {
     const suggestions = await generateFollowupPrompts({
       conversation_id: workflow.conversation_id,
@@ -639,22 +805,27 @@ async function attachFollowupSuggestions(messageId: string, summary: string) {
       user_prompt: workspacePrompt(),
       summary,
     });
-    const clean = suggestions.map((s) => s.trim()).filter(Boolean).slice(0, 3);
-    if (clean.length === 0) return;
-    const nextWorkflow: WorkflowState = { ...workflow, suggestions: clean };
-    const msg = messages().find((m) => m.id === messageId);
-    const oldMeta = msg ? metadataForMessage(msg) : undefined;
-    const metadata = buildMessageMetadata(
-      nextWorkflow,
-      oldMeta?.display_content ?? summary,
-      oldMeta?.content_hidden,
-    );
-    if (!metadata) return;
-    attachMetadataToMessage(messageId, metadata);
-    persistMessageMetadata(messageId, metadata);
+    clean = suggestions.map((s) => s.trim()).filter(Boolean).slice(0, 3);
   } catch (e) {
     console.warn("生成推荐追问失败:", e);
   }
+  // The suggestion row must always appear — fall back locally when the LLM call fails.
+  if (clean.length === 0) clean = fallbackFollowupSuggestions(workflow.mode);
+  const nextWorkflow: WorkflowState = { ...workflow, suggestions: clean };
+  const msg = messages().find((m) => m.id === messageId);
+  // Conversation switched/deleted while the LLM call was in flight — persisting
+  // metadata built without the live message would erase its content_hidden flag.
+  if (!msg) return;
+  const oldMeta = metadataForMessage(msg);
+  const metadata = buildMessageMetadata(
+    nextWorkflow,
+    oldMeta?.display_content ?? summary,
+    oldMeta?.content_hidden,
+    oldMeta?.citation_audit,
+  );
+  if (!metadata) return;
+  attachMetadataToMessage(messageId, metadata);
+  persistMessageMetadata(messageId, metadata);
 }
 
 export function useConversation() {
@@ -703,6 +874,7 @@ export function useConversation() {
       setMessages([]);
       setWorkflowByMessageId({});
       setPendingContextRefs([]);
+      clearInlineMentions();
       clearStreamWatchdog();
       setStreamingContent("");
       setStreamPhase(null);
@@ -716,6 +888,7 @@ export function useConversation() {
   async function switchConversation(id: string) {
     setActiveConversationId(id);
     setPendingContextRefs([]);
+    clearInlineMentions();
     clearStreamWatchdog();
     setStreamingContent("");
     setStreamPhase(null);
@@ -735,6 +908,7 @@ export function useConversation() {
     setMessages([]);
     setWorkflowByMessageId({});
     setPendingContextRefs([]);
+    clearInlineMentions();
     clearStreamWatchdog();
     setStreamingContent("");
     setStreamPhase(null);
@@ -801,12 +975,16 @@ export function useConversation() {
 
       if (isDocDraft) {
         setStreamPhase("review");
+        const envelope = extractDraftOutputEnvelope(content);
         const parsed = await tryApplyDocumentFromContent(content);
         if (parsed) {
-          displayContent = draftCompletionSummary(docMeta().title || "法律文书");
+          displayContent = draftDisplayContent(
+            envelope.assistantMarkdown,
+            docMeta().title || "法律文书",
+          );
           contentHidden = true;
         } else {
-          clearDocumentState();
+          // Keep any previously rendered document — the failed turn produced nothing usable.
           setDraftWorkflowActive(false);
           displayContent =
             "**起草未完成：** 模型返回了工具调用残留或非法务正文，右侧预览已跳过。请重试发送，或检查模型是否支持工具调用。";
@@ -817,22 +995,35 @@ export function useConversation() {
         if (!cleaned || containsToolLeakage(cleaned)) {
           displayContent =
             "**分析未完成：** 模型返回了工具调用残留，未能生成可读报告。请重试，或检查模型是否支持标准工具调用。";
-          setDocumentMarkdown("");
+          // Keep any previously rendered report — the failed turn wrote nothing
+          // to the store, and restore would re-apply the old one anyway.
           shouldSuggest = false;
         } else {
-          setDocumentMarkdown(cleaned);
+          applyMarkdownReport(stripReportPreamble(cleaned));
           displayContent = evidenceCompletionSummary(workspaceModeLabel() || "案卷分析报告");
           contentHidden = true;
         }
       } else {
+        const envelope = extractDraftOutputEnvelope(content);
         const parsed = await tryApplyDocumentFromContent(content);
         if (parsed) {
-          displayContent = draftCompletionSummary(docMeta().title || "法律文书");
+          displayContent = envelope.assistantMarkdown
+            ? draftDisplayContent(envelope.assistantMarkdown, docMeta().title || "法律文书")
+            : draftCompletionSummary(docMeta().title || "法律文书");
           contentHidden = true;
         }
       }
 
-      const metadata = buildMessageMetadata(workflow, displayContent, contentHidden);
+      // Citation audit (if its trace event already arrived): badge the panel
+      // and append the verification stats line. Late arrivals are handled by
+      // applyLateCitationAudit.
+      const audit = citationAuditByMessageId()[messageId];
+      if (audit && audit.total > 0) {
+        applyAuditToDocumentState(audit);
+        displayContent = appendAuditLine(displayContent, audit);
+      }
+
+      const metadata = buildMessageMetadata(workflow, displayContent, contentHidden, audit);
       addMessage({
         id: messageId,
         conversation_id: activeConversationId() || "",
@@ -881,10 +1072,23 @@ export function useConversation() {
 
   function removeContextRef(path: string) {
     setPendingContextRefs((prev) => prev.filter((r) => r.path !== path));
+    removeInlineMention(path);
   }
 
   function clearContextRefs() {
     setPendingContextRefs([]);
+  }
+
+  function addInlineMention(path: string) {
+    setInlineMentionPaths((prev) => (prev.includes(path) ? prev : [...prev, path]));
+  }
+
+  function removeInlineMention(path: string) {
+    setInlineMentionPaths((prev) => prev.filter((p) => p !== path));
+  }
+
+  function clearInlineMentions() {
+    setInlineMentionPaths([]);
   }
 
   function applyWorkspaceIndexProgress(event: {
@@ -914,6 +1118,16 @@ export function useConversation() {
   }
 
   function ingestAgentTrace(event: AgentTraceEvent) {
+    if (event.kind === "citation_audit") {
+      const audit = event.payload as unknown as CitationAudit;
+      if (audit && typeof audit.total === "number") {
+        setCitationAuditByMessageId((prev) => ({
+          ...prev,
+          [event.message_id]: audit,
+        }));
+        applyLateCitationAudit(event.message_id, audit);
+      }
+    }
     if (event.kind === "classify_result") {
       const mode = event.payload?.mode;
       if (isAgentModeValue(mode)) {
@@ -969,6 +1183,7 @@ export function useConversation() {
       nextWorkflow,
       oldMeta?.display_content ?? clarificationSummary(),
       true,
+      oldMeta?.citation_audit,
     );
     if (metadata) {
       attachMetadataToMessage(messageId, metadata);
@@ -1019,10 +1234,14 @@ export function useConversation() {
   ): Promise<void> {
     const convId = activeConversationId();
     const trimmed = text.trim();
-    const refs = mergeDirectoryRefs(trimmed, pendingContextRefs());
+    const allRefs = mergeDirectoryRefs(trimmed, pendingContextRefs());
+    // Resolve inline @ mentions: if user used @refs in text, use only those; otherwise use all attachments
+    const inlineRefs = resolveInlineMentions(trimmed, allRefs, inlineMentionPaths());
+    const refs = inlineRefs.length > 0 ? inlineRefs : allRefs;
     if (!convId || isStreaming()) return Promise.resolve();
     if (!trimmed && refs.length === 0) return Promise.resolve();
     clearContextRefs();
+    clearInlineMentions();
 
     for (const ref of refs) {
       if (ref.kind === "directory") {
@@ -1104,6 +1323,7 @@ export function useConversation() {
     justAddedId,
     citeState,
     pendingContextRefs,
+    inlineMentionPaths,
     workspaceIndexByPath,
     messageDisplayContent,
     messageWorkflow,
@@ -1113,6 +1333,9 @@ export function useConversation() {
     addContextRef,
     removeContextRef,
     clearContextRefs,
+    addInlineMention,
+    removeInlineMention,
+    clearInlineMentions,
     applyWorkspaceIndexProgress,
     workspaceIndexForPath,
     addConversation,
@@ -1137,5 +1360,6 @@ export function useConversation() {
     initWorkspace,
     sendChatMessage,
     flashArticle,
+    persistMessageFeedback,
   };
 }

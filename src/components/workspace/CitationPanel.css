@@ -7,3 +7,50 @@
   color: var(--muted);
   line-height: 1.6;
 }
+
+/* Citation verification badges (✓已核验 / ✓已检索 / ⚠待律师复核) */
+.cite-card .cc-tag {
+  white-space: normal;
+  flex-wrap: wrap;
+}
+
+.cc-verify {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 5px;
+  padding: 1px 6px;
+  letter-spacing: 0.02em;
+}
+
+.cc-verify.ok {
+  color: var(--green, #1a7f4b);
+  background: rgba(26, 127, 75, 0.12);
+}
+
+.cc-verify.ret {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.cc-verify.warn {
+  color: var(--amber, #b45309);
+  background: rgba(180, 83, 9, 0.12);
+}
+
+.cc-tier {
+  display: inline-flex;
+  font-size: 9.5px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+
+.cc-note {
+  font-size: 11px;
+  color: var(--amber, #b45309);
+  margin: -4px 0 8px;
+  line-height: 1.5;
+}

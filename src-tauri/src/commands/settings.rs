@@ -365,3 +365,13 @@ pub async fn set_allowed_file_dirs(
         .map_err(|e| e.to_string())?;
     crate::commands::files::reload_sandbox_from_db(&db, &sandbox).await
 }
+
+#[tauri::command]
+pub async fn get_law_library_status() -> Result<crate::law_library::LibraryStatus, String> {
+    crate::law_library::status().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn reindex_law_library() -> Result<crate::workspace::IndexStats, String> {
+    crate::law_library::reindex().await.map_err(|e| e.to_string())
+}
