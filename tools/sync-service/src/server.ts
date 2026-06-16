@@ -4,8 +4,13 @@
  */
 import { mkdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { extname, join, resolve } from "node:path";
 import { createHash } from "node:crypto";
+import {
+  buildDownloadCatalog,
+  resolveAppArtifactPath,
+  type AppReleaseManifest,
+} from "./app-release.ts";
 import {
   appendFeedback,
   loadAllFeedback,
@@ -30,6 +35,13 @@ const FEEDBACK_LOG = join(DATA_DIR, "feedback.jsonl");
 const TRIAGE_PATH = join(DATA_DIR, "feedback-triage.json");
 const SKILLS_DIR = join(DATA_DIR, "skills");
 const APP_DIR = join(DATA_DIR, "app");
+const PUBLIC_DIR = join(import.meta.dir, "..", "public");
+const INDEX_HTML = join(PUBLIC_DIR, "index.html");
+const ADMIN_HTML = join(PUBLIC_DIR, "admin.html");
+
+function isReadMethod(method: string): boolean {
+  return method === "GET" || method === "HEAD";
+}
 
 async function ensureDirs() {
   await mkdir(DATA_DIR, { recursive: true });
@@ -59,13 +71,63 @@ function checkAuth(req: Request): boolean {
   return auth === `Bearer ${expected}`;
 }
 
+function isPublicApiPath(path: string): boolean {
+  return (
+    path === "/api/app/downloads" ||
+    path.startsWith("/api/app/latest/") ||
+    path.startsWith("/api/app/download/")
+  );
+}
+
+function contentTypeForFile(filePath: string): string {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith(".appimage")) return "application/octet-stream";
+  if (lower.endsWith(".tar.gz")) return "application/gzip";
+  switch (extname(lower)) {
+    case ".exe":
+      return "application/vnd.microsoft.portable-executable";
+    case ".msi":
+      return "application/x-msi";
+    case ".dmg":
+      return "application/x-apple-diskimage";
+    case ".deb":
+      return "application/vnd.debian.binary-package";
+    case ".zip":
+      return "application/zip";
+    case ".json":
+      return "application/json; charset=utf-8";
+    case ".png":
+      return "image/png";
+    case ".svg":
+      return "image/svg+xml";
+    default:
+      return "application/octet-stream";
+  }
+}
+
+async function serveHomePage(): Promise<Response> {
+  if (!existsSync(INDEX_HTML)) {
+    return json({ error: "home page not found" }, 404);
+  }
+  const html = await readFile(INDEX_HTML, "utf8");
+  return text(html, "text/html; charset=utf-8");
+}
+
+async function serveAdminPage(): Promise<Response> {
+  if (!existsSync(ADMIN_HTML)) {
+    return json({ error: "admin page not found" }, 404);
+  }
+  const html = await readFile(ADMIN_HTML, "utf8");
+  return text(html, "text/html; charset=utf-8");
+}
+
 async function readSkillManifest(channel: string): Promise<Record<string, unknown> | null> {
   const path = join(SKILLS_DIR, `manifest-${channel}.json`);
   if (!existsSync(path)) return null;
   return JSON.parse(await readFile(path, "utf8"));
 }
 
-async function readAppManifest(): Promise<Record<string, unknown> | null> {
+async function readAppManifest(): Promise<AppReleaseManifest | null> {
   const path = join(APP_DIR, "latest.json");
   if (!existsSync(path)) return null;
   return JSON.parse(await readFile(path, "utf8"));
@@ -88,7 +150,24 @@ const server = Bun.serve({
       return json({ ok: true, service: "inkstatute-sync", version: "0.2.0" });
     }
 
-    if (path.startsWith("/api/") && !checkAuth(req)) {
+    // --- Public homepage + Admin UI ---
+    if (path === "/" && isReadMethod(req.method)) {
+      return serveHomePage();
+    }
+
+    if ((path === "/admin" || path === "/admin/") && isReadMethod(req.method)) {
+      return serveAdminPage();
+    }
+
+    if (path === "/landing-product.png" && isReadMethod(req.method)) {
+      const imagePath = join(PUBLIC_DIR, "landing-product.png");
+      if (!existsSync(imagePath)) return json({ error: "not found" }, 404);
+      return new Response(await readFile(imagePath), {
+        headers: { "Content-Type": "image/png" },
+      });
+    }
+
+    if (path.startsWith("/api/") && !isPublicApiPath(path) && !checkAuth(req)) {
       return unauthorized();
     }
 
@@ -103,13 +182,14 @@ const server = Bun.serve({
       const accepted: Array<{ outbox_id: string; remote_id: string }> = [];
       for (const item of body.items ?? []) {
         const remote_id = crypto.randomUUID();
+        const payload = item.payload as FeedbackRecord["payload"];
         const record: FeedbackRecord = {
           remote_id,
           outbox_id: item.outbox_id,
           device_id: body.device_id,
-          app_version: body.app_version,
-          skills_version: body.skills_version ?? null,
-          payload: item.payload as FeedbackRecord["payload"],
+          app_version: payload.app_version?.trim() || body.app_version,
+          skills_version: payload.skills_version ?? body.skills_version ?? null,
+          payload,
           received_at: new Date().toISOString(),
         };
         await appendFeedback(FEEDBACK_LOG, record);
@@ -217,6 +297,29 @@ const server = Bun.serve({
       });
     }
 
+    if (path === "/api/app/downloads" && req.method === "GET") {
+      const manifest = await readAppManifest();
+      return json(buildDownloadCatalog(manifest, req.headers.get("user-agent")));
+    }
+
+    const appDownload = path.match(/^\/api\/app\/download\/(.+)$/);
+    if (appDownload && req.method === "GET") {
+      const fileName = appDownload[1]!;
+      let filePath: string;
+      try {
+        filePath = resolveAppArtifactPath(APP_DIR, fileName);
+      } catch {
+        return json({ error: "invalid path" }, 400);
+      }
+      if (!existsSync(filePath)) return json({ error: "not found" }, 404);
+      return new Response(await readFile(filePath), {
+        headers: {
+          "Content-Type": contentTypeForFile(filePath),
+          "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(decodeURIComponent(fileName))}`,
+        },
+      });
+    }
+
     const appLatest = path.match(/^\/api\/app\/latest\/([^/]+)\/([^/]+)\/(.+)$/);
     if (appLatest && req.method === "GET") {
       const manifest = await readAppManifest();
@@ -239,6 +342,7 @@ const server = Bun.serve({
 await ensureDirs();
 console.log(`墨律同步服务 listening on http://${HOST}:${server.port}`);
 console.log(`Data dir: ${DATA_DIR}`);
+console.log(`Admin UI: http://${HOST}:${server.port}/admin`);
 console.log(`Feedback ops: GET /api/feedback, /api/feedback/export.md`);
 
 export async function sha256File(filePath: string): Promise<string> {

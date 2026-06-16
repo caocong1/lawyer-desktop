@@ -11,6 +11,7 @@ use crate::llm::types::{ChatMessage, ChatRequest, ToolCall};
 use crate::mcp::manager::McpManager;
 use crate::security::eval_sandbox::EvalPathSandbox;
 use crate::security::path_sandbox::PathSandbox;
+use crate::skills::agent_classifier::AgentMode;
 use crate::skills::loader::{load_research_gate, SkillMetadata};
 use crate::skills::SkillRegistry;
 use sqlx::{Pool, Sqlite};
@@ -47,7 +48,13 @@ pub async fn run_turn_core(
     let research_gate_ref = research_gate.as_deref();
 
     let mut active_skill = skill_override;
-    let tools = build_all_tools(mcp, true).await;
+    // The eval runner only replays drafting/evidence skills, never Q&A.
+    let mode = if evidence_mode {
+        AgentMode::Evidence
+    } else {
+        AgentMode::Draft
+    };
+    let tools = build_all_tools(mcp, mode, true).await;
     let retrieval_tool_names: Vec<String> = tools
         .iter()
         .filter(|t| {
@@ -61,7 +68,7 @@ pub async fn run_turn_core(
         &all_skills,
         research_gate_ref,
         active_skill.as_ref(),
-        evidence_mode,
+        mode,
         &retrieval_tool_names,
         vec![],
         user_content.to_string(),
@@ -133,7 +140,7 @@ pub async fn run_turn_core(
                         &all_skills,
                         research_gate_ref,
                         active_skill.as_ref(),
-                        evidence_mode,
+                        mode,
                         &retrieval_tool_names,
                     );
                 }

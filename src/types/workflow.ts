@@ -31,6 +31,8 @@ export interface ClarificationQuestion {
   id: string;
   question: string;
   options: ClarificationOption[];
+  /** When true, user may select multiple options; default single-select. */
+  allow_multiple?: boolean;
   allow_free_text?: boolean;
 }
 

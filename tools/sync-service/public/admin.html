@@ -1,0 +1,876 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>墨律反馈运营</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600&family=Noto+Serif+SC:wght@500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #1a1816;
+      --surface: #24211e;
+      --surface-2: #2e2a26;
+      --ink: #e8e2d8;
+      --ink-soft: #b8afa3;
+      --muted: #7a7268;
+      --line: #3d3832;
+      --accent: #c45c4a;
+      --accent-soft: rgba(196, 92, 74, 0.15);
+      --gold: #c9a45c;
+      --up: #5a9a6e;
+      --down: #c45c4a;
+      --open: #c9a45c;
+      --handled: #5a9a6e;
+      --sans: "Noto Sans SC", system-ui, sans-serif;
+      --serif: "Noto Serif SC", Georgia, serif;
+      --radius: 8px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--ink);
+      min-height: 100vh;
+      line-height: 1.5;
+    }
+
+    .layout {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 1.5rem;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+    }
+
+    h1 {
+      font-family: var(--serif);
+      font-size: 1.5rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+
+    .subtitle { color: var(--muted); font-size: 0.85rem; margin-top: 0.15rem; }
+
+    .header-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+    button, .btn {
+      font-family: inherit;
+      font-size: 0.85rem;
+      padding: 0.45rem 0.9rem;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      color: var(--ink);
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    button:hover:not(:disabled), .btn:hover { background: var(--line); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    button.primary:hover:not(:disabled) { filter: brightness(1.08); }
+
+    .auth-bar {
+      display: none;
+      background: var(--surface);
+      border: 1px solid var(--gold);
+      border-radius: var(--radius);
+      padding: 0.75rem 1rem;
+      margin-bottom: 1rem;
+      gap: 0.75rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .auth-bar.visible { display: flex; }
+
+    .auth-bar input {
+      flex: 1;
+      min-width: 200px;
+      padding: 0.4rem 0.6rem;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: var(--bg);
+      color: var(--ink);
+      font-family: inherit;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .stat {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 0.85rem 1rem;
+    }
+
+    .stat-num {
+      font-size: 1.6rem;
+      font-weight: 600;
+      font-family: var(--serif);
+      line-height: 1.2;
+    }
+
+    .stat-label { font-size: 0.78rem; color: var(--muted); margin-top: 0.15rem; }
+
+    .stat.up .stat-num { color: var(--up); }
+    .stat.down .stat-num { color: var(--down); }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      margin-bottom: 1rem;
+    }
+
+    .panel-head {
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--line);
+      font-weight: 500;
+      font-size: 0.9rem;
+    }
+
+    .filters {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 0.75rem;
+      padding: 1rem;
+    }
+
+    .field label {
+      display: block;
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-bottom: 0.25rem;
+    }
+
+    .field select, .field input {
+      width: 100%;
+      padding: 0.4rem 0.5rem;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: var(--bg);
+      color: var(--ink);
+      font-family: inherit;
+      font-size: 0.85rem;
+    }
+
+    .filter-actions {
+      padding: 0 1rem 1rem;
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--line);
+      flex-wrap: wrap;
+    }
+
+    .toolbar-left { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+
+    .count-badge {
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+
+    th, td {
+      padding: 0.6rem 0.75rem;
+      text-align: left;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+
+    th {
+      font-weight: 500;
+      color: var(--muted);
+      font-size: 0.75rem;
+      background: var(--surface-2);
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+
+    tr:hover td { background: rgba(255,255,255,0.02); }
+    tr.selected td { background: var(--accent-soft); }
+
+    .table-wrap { overflow-x: auto; max-height: 55vh; overflow-y: auto; }
+
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.45rem;
+      border-radius: 4px;
+      font-size: 0.72rem;
+      font-weight: 500;
+    }
+
+    .badge.up { background: rgba(90,154,110,0.2); color: var(--up); }
+    .badge.down { background: rgba(196,92,74,0.2); color: var(--down); }
+    .badge.open { background: rgba(201,164,92,0.2); color: var(--open); }
+    .badge.triaged { background: rgba(100,140,200,0.2); color: #8ab4e8; }
+    .badge.handled { background: rgba(90,154,110,0.2); color: var(--handled); }
+    .badge.wontfix { background: rgba(120,120,120,0.2); color: #999; }
+
+    .comment-preview {
+      max-width: 220px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--ink-soft);
+    }
+
+    .mono { font-family: ui-monospace, monospace; font-size: 0.75rem; color: var(--muted); }
+
+    .link-btn {
+      background: none;
+      border: none;
+      color: var(--gold);
+      padding: 0;
+      font-size: 0.82rem;
+      text-decoration: underline;
+      cursor: pointer;
+    }
+
+    .empty {
+      padding: 2.5rem;
+      text-align: center;
+      color: var(--muted);
+    }
+
+    .toast {
+      position: fixed;
+      bottom: 1.5rem;
+      right: 1.5rem;
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      padding: 0.75rem 1.25rem;
+      border-radius: var(--radius);
+      font-size: 0.85rem;
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity 0.2s, transform 0.2s;
+      z-index: 100;
+      max-width: 360px;
+    }
+
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast.error { border-color: var(--down); color: #f0a89e; }
+
+    /* Detail drawer */
+    .overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.55);
+      z-index: 50;
+    }
+
+    .overlay.open { display: block; }
+
+    .drawer {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: min(480px, 100vw);
+      height: 100vh;
+      background: var(--surface);
+      border-left: 1px solid var(--line);
+      z-index: 60;
+      transform: translateX(100%);
+      transition: transform 0.25s ease;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .drawer.open { transform: translateX(0); }
+
+    .drawer-head {
+      padding: 1rem 1.25rem;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .drawer-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1.25rem;
+    }
+
+    .detail-section { margin-bottom: 1.25rem; }
+
+    .detail-section h3 {
+      font-size: 0.78rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.5rem;
+    }
+
+    .detail-value { font-size: 0.9rem; word-break: break-word; }
+
+    .answer-box {
+      background: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 0.75rem;
+      font-size: 0.82rem;
+      max-height: 200px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      color: var(--ink-soft);
+    }
+
+    .drawer-foot {
+      padding: 1rem 1.25rem;
+      border-top: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .drawer-foot .field textarea {
+      width: 100%;
+      min-height: 72px;
+      padding: 0.5rem;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: var(--bg);
+      color: var(--ink);
+      font-family: inherit;
+      font-size: 0.85rem;
+      resize: vertical;
+    }
+
+    .drawer-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+    .dim-tags { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+
+    .dim-tag {
+      font-size: 0.72rem;
+      padding: 0.15rem 0.4rem;
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      color: var(--ink-soft);
+    }
+
+    .loading { opacity: 0.5; pointer-events: none; }
+
+    @media (max-width: 640px) {
+      .layout { padding: 1rem; }
+      th:nth-child(5), td:nth-child(5),
+      th:nth-child(6), td:nth-child(6),
+      th:nth-child(8), td:nth-child(8) { display: none; }
+    }
+
+    .version-cell { font-size: 0.75rem; line-height: 1.35; }
+    .version-cell .mono { display: block; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <header>
+      <div>
+        <h1>墨律反馈运营</h1>
+        <p class="subtitle">同步服务管理台 · Phase C.5</p>
+      </div>
+      <div class="header-actions">
+        <button type="button" id="btn-export-md">导出 Markdown</button>
+        <button type="button" id="btn-export-json">导出 JSON</button>
+        <button type="button" class="primary" id="btn-refresh">刷新</button>
+      </div>
+    </header>
+
+    <div class="auth-bar" id="auth-bar">
+      <span>需要 API Key：</span>
+      <input type="password" id="api-key" placeholder="Bearer token（SYNC_API_KEY）" />
+      <button type="button" class="primary" id="btn-save-key">保存并重试</button>
+    </div>
+
+    <div class="stats" id="stats"></div>
+
+    <div class="panel">
+      <div class="panel-head">筛选</div>
+      <div class="filters">
+        <div class="field">
+          <label for="f-rating">评价</label>
+          <select id="f-rating">
+            <option value="">全部</option>
+            <option value="up">👍 好评</option>
+            <option value="down">👎 差评</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="f-status">状态</label>
+          <select id="f-status">
+            <option value="">全部</option>
+            <option value="open">open</option>
+            <option value="triaged">triaged</option>
+            <option value="handled">handled</option>
+            <option value="wontfix">wontfix</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="f-skill">Skill</label>
+          <input id="f-skill" type="text" placeholder="模糊匹配" />
+        </div>
+        <div class="field">
+          <label for="f-plugin">Plugin</label>
+          <input id="f-plugin" type="text" placeholder="模糊匹配" />
+        </div>
+        <div class="field">
+          <label for="f-target">目标仓库</label>
+          <select id="f-target">
+            <option value="">全部</option>
+            <option value="ai-for-china-legal">ai-for-china-legal</option>
+            <option value="lawyer-desktop">lawyer-desktop</option>
+            <option value="unknown">unknown</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="f-since">起始日期</label>
+          <input id="f-since" type="date" />
+        </div>
+        <div class="field">
+          <label for="f-until">截止日期</label>
+          <input id="f-until" type="date" />
+        </div>
+        <div class="field">
+          <label for="f-limit">条数上限</label>
+          <input id="f-limit" type="number" value="100" min="1" max="500" />
+        </div>
+      </div>
+      <div class="filter-actions">
+        <button type="button" class="primary" id="btn-apply">应用筛选</button>
+        <button type="button" id="btn-reset">重置</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <label><input type="checkbox" id="select-all" /> 全选</label>
+          <button type="button" id="btn-batch-handled" disabled>批量标记 handled</button>
+          <span class="count-badge" id="count-label">—</span>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:32px"></th>
+              <th>评价</th>
+              <th>Skill / Plugin</th>
+              <th>App / Skill 版本</th>
+              <th>评论</th>
+              <th>维度</th>
+              <th>状态</th>
+              <th>时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="tbody">
+            <tr><td colspan="9" class="empty">加载中…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="overlay"></div>
+  <aside class="drawer" id="drawer">
+    <div class="drawer-head">
+      <strong>反馈详情</strong>
+      <button type="button" id="btn-close-drawer">关闭</button>
+    </div>
+    <div class="drawer-body" id="drawer-body"></div>
+    <div class="drawer-foot" id="drawer-foot" style="display:none">
+      <div class="field">
+        <label for="t-status">状态</label>
+        <select id="t-status">
+          <option value="open">open</option>
+          <option value="triaged">triaged</option>
+          <option value="handled">handled</option>
+          <option value="wontfix">wontfix</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="t-target">目标仓库</label>
+        <select id="t-target">
+          <option value="">（未指定）</option>
+          <option value="ai-for-china-legal">ai-for-china-legal</option>
+          <option value="lawyer-desktop">lawyer-desktop</option>
+          <option value="unknown">unknown</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="t-notes">备注</label>
+        <textarea id="t-notes" placeholder="处理说明、发布版本等"></textarea>
+      </div>
+      <div class="drawer-actions">
+        <button type="button" class="primary" id="btn-save-triage">保存</button>
+        <button type="button" id="btn-mark-handled">标记 handled</button>
+      </div>
+    </div>
+  </aside>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const API_KEY_STORAGE = "inkstatute_sync_api_key";
+    let items = [];
+    let selectedIds = new Set();
+    let currentItem = null;
+
+    const $ = (id) => document.getElementById(id);
+
+    function getApiKey() {
+      return sessionStorage.getItem(API_KEY_STORAGE) || "";
+    }
+
+    function setApiKey(key) {
+      if (key) sessionStorage.setItem(API_KEY_STORAGE, key);
+      else sessionStorage.removeItem(API_KEY_STORAGE);
+    }
+
+    function showToast(msg, isError = false) {
+      const el = $("toast");
+      el.textContent = msg;
+      el.className = "toast show" + (isError ? " error" : "");
+      clearTimeout(showToast._t);
+      showToast._t = setTimeout(() => el.classList.remove("show"), 3200);
+    }
+
+    function buildQuery() {
+      const p = new URLSearchParams();
+      const fields = [
+        ["rating", "f-rating"],
+        ["status", "f-status"],
+        ["skill", "f-skill"],
+        ["plugin", "f-plugin"],
+        ["target_repo", "f-target"],
+        ["limit", "f-limit"],
+      ];
+      for (const [key, id] of fields) {
+        const v = $(id).value.trim();
+        if (v) p.set(key, v);
+      }
+      const since = $("f-since").value;
+      const until = $("f-until").value;
+      if (since) p.set("since", since + "T00:00:00");
+      if (until) p.set("until", until + "T23:59:59");
+      return p;
+    }
+
+    async function apiFetch(path, opts = {}) {
+      const headers = { ...(opts.headers || {}) };
+      const key = getApiKey();
+      if (key) headers["Authorization"] = "Bearer " + key;
+      if (opts.body && !headers["Content-Type"]) {
+        headers["Content-Type"] = "application/json";
+      }
+      const res = await fetch(path, { ...opts, headers });
+      if (res.status === 401) {
+        $("auth-bar").classList.add("visible");
+        throw new Error("未授权，请输入 API Key");
+      }
+      if (!res.ok) {
+        let err = res.statusText;
+        try {
+          const j = await res.json();
+          err = j.error || err;
+        } catch {}
+        throw new Error(err);
+      }
+      const ct = res.headers.get("content-type") || "";
+      if (ct.includes("application/json")) return res.json();
+      return res.text();
+    }
+
+    function fmtTime(item) {
+      const t = item.payload?.created_at || item.received_at;
+      return t ? t.slice(0, 16).replace("T", " ") : "—";
+    }
+
+    function effectiveAppVersion(item) {
+      return item.payload?.app_version?.trim() || item.app_version || "—";
+    }
+
+    function effectiveSkillsVersion(item) {
+      const fromPayload = item.payload?.skills_version?.trim();
+      if (fromPayload) return fromPayload;
+      return item.skills_version?.trim() || "—";
+    }
+
+    function esc(s) {
+      const d = document.createElement("div");
+      d.textContent = s ?? "";
+      return d.innerHTML;
+    }
+
+    function renderStats(summary) {
+      const s = summary || {};
+      const byRating = s.by_rating || {};
+      const byStatus = s.by_status || {};
+      $("stats").innerHTML = `
+        <div class="stat"><div class="stat-num">${s.total ?? 0}</div><div class="stat-label">总计</div></div>
+        <div class="stat up"><div class="stat-num">${byRating.up ?? 0}</div><div class="stat-label">👍 好评</div></div>
+        <div class="stat down"><div class="stat-num">${byRating.down ?? 0}</div><div class="stat-label">👎 差评</div></div>
+        <div class="stat"><div class="stat-num">${s.down_with_comment ?? 0}</div><div class="stat-label">有评论的差评</div></div>
+        <div class="stat"><div class="stat-num">${byStatus.open ?? 0}</div><div class="stat-label">待处理 open</div></div>
+        <div class="stat"><div class="stat-num">${byStatus.handled ?? 0}</div><div class="stat-label">已处理 handled</div></div>
+      `;
+    }
+
+    function renderTable() {
+      const tbody = $("tbody");
+      if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="9" class="empty">暂无反馈</td></tr>';
+        $("count-label").textContent = "0 条";
+        return;
+      }
+      $("count-label").textContent = items.length + " 条";
+      tbody.innerHTML = items.map((item) => {
+        const p = item.payload || {};
+        const tri = item.triage || { status: "open" };
+        const dims = (p.dimensions || []).slice(0, 2).join("、") + ((p.dimensions?.length || 0) > 2 ? "…" : "");
+        const checked = selectedIds.has(item.remote_id) ? "checked" : "";
+        const sel = selectedIds.has(item.remote_id) ? "selected" : "";
+        const appVer = effectiveAppVersion(item);
+        const skillsVer = effectiveSkillsVersion(item);
+        return `<tr class="${sel}" data-id="${esc(item.remote_id)}">
+          <td><input type="checkbox" class="row-check" data-id="${esc(item.remote_id)}" ${checked} /></td>
+          <td><span class="badge ${esc(p.rating)}">${p.rating === "up" ? "👍" : p.rating === "down" ? "👎" : "?"}</span></td>
+          <td>
+            <div>${esc(p.skill_name || "—")}</div>
+            <div class="mono">${esc(p.plugin_name || "")}</div>
+          </td>
+          <td class="version-cell">
+            <span class="mono" title="App 版本">App ${esc(appVer)}</span>
+            <span class="mono" title="Skill 包版本">Skill ${esc(skillsVer)}</span>
+          </td>
+          <td><div class="comment-preview" title="${esc(p.comment || "")}">${esc(p.comment || "—")}</div></td>
+          <td class="mono">${esc(dims || "—")}</td>
+          <td><span class="badge ${esc(tri.status)}">${esc(tri.status)}</span></td>
+          <td class="mono">${esc(fmtTime(item))}</td>
+          <td><button type="button" class="link-btn btn-detail" data-id="${esc(item.remote_id)}">详情</button></td>
+        </tr>`;
+      }).join("");
+
+      tbody.querySelectorAll(".row-check").forEach((cb) => {
+        cb.addEventListener("change", (e) => {
+          const id = e.target.dataset.id;
+          if (e.target.checked) selectedIds.add(id);
+          else selectedIds.delete(id);
+          updateBatchBtn();
+          const tr = e.target.closest("tr");
+          tr.classList.toggle("selected", e.target.checked);
+        });
+      });
+      tbody.querySelectorAll(".btn-detail").forEach((btn) => {
+        btn.addEventListener("click", () => openDetail(btn.dataset.id));
+      });
+    }
+
+    function updateBatchBtn() {
+      $("btn-batch-handled").disabled = selectedIds.size === 0;
+    }
+
+    async function loadFeedback() {
+      document.body.classList.add("loading");
+      try {
+        const q = buildQuery();
+        const data = await apiFetch("/api/feedback?" + q.toString());
+        items = data.items || [];
+        renderStats(data.summary);
+        renderTable();
+        $("auth-bar").classList.remove("visible");
+      } catch (e) {
+        showToast(e.message, true);
+        $("tbody").innerHTML = `<tr><td colspan="9" class="empty">${esc(e.message)}</td></tr>`;
+      } finally {
+        document.body.classList.remove("loading");
+      }
+    }
+
+    function openDetail(remoteId) {
+      currentItem = items.find((i) => i.remote_id === remoteId);
+      if (!currentItem) return;
+      const p = currentItem.payload || {};
+      const tri = currentItem.triage || { status: "open" };
+      const dims = p.dimensions || [];
+
+      $("drawer-body").innerHTML = `
+        <div class="detail-section">
+          <h3>标识</h3>
+          <div class="detail-value mono">${esc(currentItem.remote_id)}</div>
+        </div>
+        <div class="detail-section">
+          <h3>评价 / Skill</h3>
+          <div class="detail-value">
+            <span class="badge ${esc(p.rating)}">${p.rating === "up" ? "👍" : "👎"}</span>
+            ${esc(p.skill_name || "—")} · ${esc(p.plugin_name || "—")}
+          </div>
+        </div>
+        <div class="detail-section">
+          <h3>评论</h3>
+          <div class="detail-value">${esc(p.comment || "（无）")}</div>
+        </div>
+        ${dims.length ? `<div class="detail-section"><h3>维度</h3><div class="dim-tags">${dims.map((d) => `<span class="dim-tag">${esc(d)}</span>`).join("")}</div></div>` : ""}
+        <div class="detail-section">
+          <h3>版本</h3>
+          <div class="detail-value mono" style="font-size:0.85rem">
+            App ${esc(effectiveAppVersion(currentItem))}<br/>
+            Skill 包 ${esc(effectiveSkillsVersion(currentItem))}
+          </div>
+        </div>
+        <div class="detail-section">
+          <h3>环境</h3>
+          <div class="detail-value mono" style="font-size:0.8rem">
+            Device ${esc(currentItem.device_id?.slice(0, 12) || "—")}… · ${esc(fmtTime(currentItem))}
+          </div>
+        </div>
+        ${p.answer ? `<div class="detail-section"><h3>AI 回答</h3><div class="answer-box">${esc(p.answer)}</div></div>` : ""}
+      `;
+
+      $("t-status").value = tri.status || "open";
+      $("t-target").value = tri.target_repo || "";
+      $("t-notes").value = tri.notes || "";
+      $("drawer-foot").style.display = "";
+      $("overlay").classList.add("open");
+      $("drawer").classList.add("open");
+    }
+
+    function closeDrawer() {
+      $("overlay").classList.remove("open");
+      $("drawer").classList.remove("open");
+      currentItem = null;
+    }
+
+    async function saveTriage(statusOverride) {
+      if (!currentItem) return;
+      const body = {
+        remote_id: currentItem.remote_id,
+        status: statusOverride || $("t-status").value,
+        target_repo: $("t-target").value || undefined,
+        notes: $("t-notes").value.trim() || undefined,
+      };
+      try {
+        await apiFetch("/api/feedback/triage", { method: "POST", body: JSON.stringify(body) });
+        showToast("已保存");
+        closeDrawer();
+        await loadFeedback();
+      } catch (e) {
+        showToast(e.message, true);
+      }
+    }
+
+    async function batchHandled() {
+      if (!selectedIds.size) return;
+      try {
+        await apiFetch("/api/feedback/triage/batch", {
+          method: "POST",
+          body: JSON.stringify({ remote_ids: [...selectedIds], status: "handled" }),
+        });
+        showToast(`已标记 ${selectedIds.size} 条为 handled`);
+        selectedIds.clear();
+        $("select-all").checked = false;
+        updateBatchBtn();
+        await loadFeedback();
+      } catch (e) {
+        showToast(e.message, true);
+      }
+    }
+
+    async function exportFile(fmt) {
+      try {
+        const q = buildQuery();
+        const path = fmt === "md" ? "/api/feedback/export.md?" : "/api/feedback/export.json?";
+        const data = await apiFetch(path + q.toString());
+        const blob = new Blob(
+          [typeof data === "string" ? data : JSON.stringify(data, null, 2)],
+          { type: fmt === "md" ? "text/markdown" : "application/json" },
+        );
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `feedback-export.${fmt === "md" ? "md" : "json"}`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        showToast("导出完成");
+      } catch (e) {
+        showToast(e.message, true);
+      }
+    }
+
+    function resetFilters() {
+      ["f-rating", "f-status", "f-skill", "f-plugin", "f-target", "f-since", "f-until"].forEach((id) => {
+        $(id).value = "";
+      });
+      $("f-limit").value = "100";
+      loadFeedback();
+    }
+
+    $("btn-refresh").addEventListener("click", loadFeedback);
+    $("btn-apply").addEventListener("click", loadFeedback);
+    $("btn-reset").addEventListener("click", resetFilters);
+    $("btn-export-md").addEventListener("click", () => exportFile("md"));
+    $("btn-export-json").addEventListener("click", () => exportFile("json"));
+    $("btn-close-drawer").addEventListener("click", closeDrawer);
+    $("overlay").addEventListener("click", closeDrawer);
+    $("btn-save-triage").addEventListener("click", () => saveTriage());
+    $("btn-mark-handled").addEventListener("click", () => saveTriage("handled"));
+    $("btn-batch-handled").addEventListener("click", batchHandled);
+    $("btn-save-key").addEventListener("click", () => {
+      setApiKey($("api-key").value.trim());
+      loadFeedback();
+    });
+
+    $("select-all").addEventListener("change", (e) => {
+      const checked = e.target.checked;
+      items.forEach((i) => {
+        if (checked) selectedIds.add(i.remote_id);
+        else selectedIds.delete(i.remote_id);
+      });
+      renderTable();
+      updateBatchBtn();
+    });
+
+    if (getApiKey()) $("api-key").value = getApiKey();
+    loadFeedback();
+  </script>
+</body>
+</html>

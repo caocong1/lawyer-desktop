@@ -14,7 +14,7 @@ pub enum AgentMode {
 impl AgentMode {
     pub fn ui_label(self) -> &'static str {
         match self {
-            AgentMode::Chat => "法律咨询",
+            AgentMode::Chat => "法律问答",
             AgentMode::Draft => "文书起草",
             AgentMode::Evidence => "案情分析",
         }
@@ -31,6 +31,16 @@ pub struct ClassifyContext {
     pub has_directory_ref: bool,
     pub has_file_ref: bool,
     pub directory_aliases: Vec<String>,
+    /// Mode of the task that currently owns the right-side artifact ("draft" /
+    /// "evidence"), or None when no producing task is committed yet.
+    #[serde(default)]
+    pub current_mode: Option<String>,
+    /// Human label of the committed task (e.g. "房屋租赁合同起草").
+    #[serde(default)]
+    pub current_task_label: Option<String>,
+    /// True when a document/report already exists and a switch would replace it.
+    #[serde(default)]
+    pub has_active_document: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +48,10 @@ pub struct ClassifyResult {
     pub mode: AgentMode,
     pub label: String,
     pub reason: String,
+    /// Intent transition relative to the committed task: "continue" | "switch"
+    /// | "aside". Drives the client-side switch-confirmation gate.
+    #[serde(default = "default_classify_action")]
+    pub action: String,
     #[serde(default = "default_classify_source")]
     pub source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -50,29 +64,54 @@ fn default_classify_source() -> String {
     "llm".into()
 }
 
+fn default_classify_action() -> String {
+    "continue".into()
+}
+
+/// Normalize the model's action token to one of the three known values;
+/// anything unrecognized degrades to the safe "continue".
+fn normalize_action(raw: Option<&str>) -> String {
+    match raw.map(|s| s.trim().to_lowercase()).as_deref() {
+        Some("switch") | Some("切换") => "switch".into(),
+        Some("aside") | Some("插问") | Some("提问") => "aside".into(),
+        _ => "continue".into(),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct ClassifierJson {
     mode: String,
+    #[serde(default)]
+    action: Option<String>,
     #[serde(default)]
     label: Option<String>,
     #[serde(default)]
     reason: Option<String>,
 }
 
-const CLASSIFIER_SYSTEM: &str = r#"你是墨律 Inkstatute 的任务路由器。根据用户消息和上下文，判断应使用的 Agent 模式。
+const CLASSIFIER_SYSTEM: &str = r#"你是墨律 Inkstatute 的任务路由器。根据用户消息、附加资料与「当前任务」上下文，判断本条消息应使用的 Agent 模式 mode 与意图动作 action。
 
-模式定义（只能选一个）：
-- draft：用户需要生成正式法律文书（合同、起诉状、答辩状、法律意见书等），输出将进入右侧结构化文书预览。
-- evidence：用户需要基于本地案卷/案件资料做案情分析、诉讼方案、证据梳理、尽调报告等；应通过索引检索工具取证，输出 Markdown 分析报告（非 JSON 文书）。
-- chat：一般法律咨询、法条解释、流程问答，无需生成完整文书或诉讼方案。
+模式 mode（只能选一个）：
+- draft：用户要生成正式法律文书（合同、起诉状、答辩状、法律意见书等），输出进入右侧结构化文书预览。
+- evidence：用户要基于本地案卷/案件资料做案情分析、诉讼方案、证据梳理、尽调报告等；通过索引检索工具取证，输出 Markdown 分析报告（非 JSON 文书）。
+- chat：法律问答 / 咨询解惑——就具体法律问题、法条含义、可行性、风险、流程等寻求解答，不产出成稿文书、也不基于本地案卷写诉讼方案。
+
+意图动作 action（只能选一个，结合「当前任务」判断）：
+- continue：延续或细化当前任务（例如对当前正在起草的文书提出修改、补充要求）。
+- switch：改做另一件产出型任务（换一种文书；从问答转为起草；从起草转为案情分析；起草 A 改为起草明显不同的 B）。
+- aside：在当前产出型任务进行中插入一个法律问题/咨询，并不打算放弃当前产出物（此时 mode 通常为 chat）。
 
 规则：
 1. 仅输出一行 JSON，无 markdown 代码块，无其它文字。
-2. 格式：{"mode":"draft|evidence|chat","label":"简短中文标签","reason":"一句话理由"}
-3. 用户要求「读取目录/案件资料 + 诉讼方案/案情分析」→ evidence，不是 draft。
-4. 附加了案卷目录时，若用户在分析材料或写诉讼方案 → evidence；若明确要求起草某类格式文书 → draft。
-5. 不确定时选 chat，不要默认 draft。
-6. 消息以「以下是补充信息」开头说明用户在回答此前任务的澄清问题：附加目录为「是」时选 evidence；提到起草/文书时选 draft；不要选 chat。
+2. 格式：{"mode":"draft|evidence|chat","action":"continue|switch|aside","label":"简短中文任务标签","reason":"一句话理由"}
+3. 没有「当前任务」（首次消息，或此前只做问答、无产出文书）时，action 一律填 continue。
+4. 「当前任务」是某类文书起草，且本条只是顺带问个法律问题、并未要求改文书 → mode=chat、action=aside。
+5. 「当前任务」是某类文书，且本条要求改做另一类文书或另一种产出 → action=switch，mode 取新任务的模式。
+6. 「当前任务」是某类文书，且本条是对它的修改/补充 → action=continue，mode 保持该产出型模式。
+7. 读取目录/案件资料 + 诉讼方案/案情分析 → evidence，不是 draft。附了案卷目录时：分析材料或写诉讼方案→evidence；明确要起草某类格式文书→draft。
+8. label 用最能描述「本条所指任务」的简短中文（如「房屋租赁合同起草」「股东知情权咨询」）。
+9. 不确定 mode 时选 chat；不确定 action 时选 continue，不要轻易 switch。
+10. 消息以「以下是补充信息」开头说明用户在回答此前任务的澄清问题：action=continue；附加目录为「是」时 evidence；提到起草/文书时 draft；不要选 chat。
 "#;
 
 pub async fn classify_agent_mode(
@@ -83,7 +122,10 @@ pub async fn classify_agent_mode(
         "用户消息：{}\n\
          附加目录：{}\n\
          附加文件：{}\n\
-         目录别名：{}",
+         目录别名：{}\n\
+         当前任务模式：{}\n\
+         当前任务标签：{}\n\
+         当前是否已有产出文书：{}",
         ctx.user_message,
         if ctx.has_directory_ref { "是" } else { "否" },
         if ctx.has_file_ref { "是" } else { "否" },
@@ -91,7 +133,10 @@ pub async fn classify_agent_mode(
             "无".into()
         } else {
             ctx.directory_aliases.join("、")
-        }
+        },
+        ctx.current_mode.as_deref().unwrap_or("无"),
+        ctx.current_task_label.as_deref().unwrap_or("无"),
+        if ctx.has_active_document { "是" } else { "否" },
     );
 
     let request = ChatRequest {
@@ -116,7 +161,7 @@ pub async fn classify_agent_mode(
         ],
         tools: None,
         temperature: Some(0.0),
-        max_tokens: Some(120),
+        max_tokens: Some(160),
         stream: false,
     };
 
@@ -157,6 +202,13 @@ fn parse_classifier_response(raw: &str, ctx: &ClassifyContext) -> ClassifyResult
     match serde_json::from_str::<ClassifierJson>(json_str) {
         Ok(parsed) => {
             if let Some(mode) = parse_mode_str(&parsed.mode) {
+                // Without a committed task there is nothing to switch away from,
+                // so a switch/aside verdict is meaningless — pin to continue.
+                let action = if ctx.current_mode.is_none() {
+                    "continue".into()
+                } else {
+                    normalize_action(parsed.action.as_deref())
+                };
                 return ClassifyResult {
                     mode,
                     label: parsed
@@ -164,6 +216,7 @@ fn parse_classifier_response(raw: &str, ctx: &ClassifyContext) -> ClassifyResult
                         .filter(|s| !s.is_empty())
                         .unwrap_or_else(|| mode.ui_label().to_string()),
                     reason: parsed.reason.unwrap_or_default(),
+                    action,
                     source: "llm".into(),
                     fallback_reason: None,
                     diagnostic: None,
@@ -238,11 +291,11 @@ fn extract_json_object(text: &str) -> Option<&str> {
     None
 }
 
-fn parse_mode_str(s: &str) -> Option<AgentMode> {
+pub fn parse_mode_str(s: &str) -> Option<AgentMode> {
     match s.trim().to_lowercase().as_str() {
         "draft" | "文书" | "起草" => Some(AgentMode::Draft),
         "evidence" | "案情" | "诉讼" | "分析" => Some(AgentMode::Evidence),
-        "chat" | "咨询" => Some(AgentMode::Chat),
+        "chat" | "咨询" | "问答" => Some(AgentMode::Chat),
         _ => None,
     }
 }
@@ -262,6 +315,8 @@ fn fallback_classify(
         label: mode.ui_label().to_string(),
         reason: "已用本地规则判断事项类型".into(),
         mode,
+        // A fallback must never surprise-switch the user's committed task.
+        action: "continue".into(),
         source: "fallback".into(),
         fallback_reason: Some(fallback_reason.into()),
         diagnostic,
@@ -279,6 +334,9 @@ mod tests {
             has_directory_ref: true,
             has_file_ref: false,
             directory_aliases: vec!["案件资料".into()],
+            current_mode: None,
+            current_task_label: None,
+            has_active_document: false,
         };
         let r = parse_classifier_response(
             r#"{"mode":"evidence","label":"诉讼方案","reason":"需检索案卷"}"#,
@@ -286,6 +344,57 @@ mod tests {
         );
         assert_eq!(r.mode, AgentMode::Evidence);
         assert_eq!(r.source, "llm");
+        // No committed task → action pinned to continue regardless of model.
+        assert_eq!(r.action, "continue");
+    }
+
+    fn ctx_with(message: &str, current_mode: Option<&str>, has_doc: bool) -> ClassifyContext {
+        ClassifyContext {
+            user_message: message.into(),
+            has_directory_ref: false,
+            has_file_ref: false,
+            directory_aliases: vec![],
+            current_mode: current_mode.map(|s| s.to_string()),
+            current_task_label: current_mode.map(|_| "股权转让协议起草".to_string()),
+            has_active_document: has_doc,
+        }
+    }
+
+    #[test]
+    fn parses_switch_action_when_task_committed() {
+        let ctx = ctx_with("改成起草一份房屋租赁合同", Some("draft"), true);
+        let r = parse_classifier_response(
+            r#"{"mode":"draft","action":"switch","label":"房屋租赁合同起草","reason":"换一种文书"}"#,
+            &ctx,
+        );
+        assert_eq!(r.mode, AgentMode::Draft);
+        assert_eq!(r.action, "switch");
+    }
+
+    #[test]
+    fn parses_aside_action_for_mid_draft_question() {
+        let ctx = ctx_with("违约金一般怎么约定？", Some("draft"), true);
+        let r = parse_classifier_response(
+            r#"{"mode":"chat","action":"aside","label":"违约金咨询","reason":"顺带提问"}"#,
+            &ctx,
+        );
+        assert_eq!(r.mode, AgentMode::Chat);
+        assert_eq!(r.action, "aside");
+    }
+
+    #[test]
+    fn unknown_action_degrades_to_continue() {
+        let ctx = ctx_with("继续完善第三条", Some("draft"), true);
+        let r = parse_classifier_response(
+            r#"{"mode":"draft","action":"bogus","label":"协议修改"}"#,
+            &ctx,
+        );
+        assert_eq!(r.action, "continue");
+    }
+
+    #[test]
+    fn parses_qa_mode_alias() {
+        assert_eq!(parse_mode_str("问答"), Some(AgentMode::Chat));
     }
 
     #[test]
@@ -295,6 +404,9 @@ mod tests {
             has_directory_ref: true,
             has_file_ref: false,
             directory_aliases: vec![],
+            current_mode: None,
+            current_task_label: None,
+            has_active_document: false,
         };
         let r = fallback_classify(&ctx, "request_failed", Some("boom".into()));
         assert_eq!(r.mode, AgentMode::Evidence);
@@ -309,6 +421,9 @@ mod tests {
             has_directory_ref: false,
             has_file_ref: false,
             directory_aliases: vec![],
+            current_mode: None,
+            current_task_label: None,
+            has_active_document: false,
         };
         let r = parse_classifier_response("不是 JSON", &ctx);
         assert_eq!(r.mode, AgentMode::Chat);
@@ -324,6 +439,9 @@ mod tests {
             has_directory_ref: false,
             has_file_ref: false,
             directory_aliases: vec![],
+            current_mode: None,
+            current_task_label: None,
+            has_active_document: false,
         };
         let r = parse_classifier_response(r#"{"mode":"other"}"#, &ctx);
         assert_eq!(r.source, "fallback");

@@ -59,6 +59,8 @@ pub struct SubmitFeedbackRequest {
     pub rating: String,
     pub comment: Option<String>,
     pub dimensions: Option<Vec<String>>,
+    pub app_version: Option<String>,
+    pub skills_version: Option<String>,
 }
 
 #[tauri::command]
@@ -108,6 +110,22 @@ pub async fn submit_message_feedback(
         .and_then(|m| m.metadata_json.as_deref())
         .and_then(|j| serde_json::from_str(j).ok());
 
+    let app_version = req
+        .app_version
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            app.config()
+                .version
+                .clone()
+                .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
+        });
+    let skills_version = req
+        .skills_version
+        .or(sync_settings.skills_version.clone());
+
     let payload = serde_json::json!({
         "feedback_id": row.id,
         "message_id": req.message_id,
@@ -120,9 +138,9 @@ pub async fn submit_message_feedback(
         "answer": answer_payload,
         "upload_full_answer": sync_settings.upload_full_answer,
         "message_metadata": metadata,
-        "app_version": app.config().version.clone().unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()),
+        "app_version": app_version,
         "device_id": sync_settings.device_id,
-        "skills_version": sync_settings.skills_version,
+        "skills_version": skills_version,
         "created_at": row.created_at,
     });
 

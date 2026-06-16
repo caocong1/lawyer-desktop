@@ -1,3 +1,4 @@
+use super::agent_classifier::AgentMode;
 use super::loader::SkillMetadata;
 use crate::llm::types::{FunctionDefinition, ToolDefinition};
 
@@ -113,13 +114,13 @@ pub fn build_system_prompt(
     skills: &[SkillMetadata],
     research_gate_content: Option<&str>,
     active_skill: Option<&SkillMetadata>,
-    evidence_mode: bool,
+    mode: AgentMode,
     retrieval_tools: &[String],
 ) -> String {
-    let mut prompt = if evidence_mode {
-        build_evidence_system_prompt()
-    } else {
-        String::from(
+    let mut prompt = match mode {
+        AgentMode::Evidence => build_evidence_system_prompt(),
+        AgentMode::Chat => build_qa_system_prompt(),
+        AgentMode::Draft => String::from(
             "你是一位专业的中国法律 AI 助手，面向中国大陆执业律师。你的职责是协助律师完成法律文书起草、合同审查、法律研究等工作。\n\n\
             重要声明：你的所有输出均为供律师审查的草稿，非法律建议，非法律结论，不能替代执业律师。律师需对最终作品负责。\n\n\
             ## 工作原则\n\
@@ -132,7 +133,7 @@ pub fn build_system_prompt(
                `{\"assistant_notes\":\"可选，左侧聊天气泡展示的说明/检索结论/依据（Markdown）\",\"document\":{\"title\":\"最终文档标题\",\"document_type\":\"可选\",\"sections\":[{\"heading\":\"章节标题\",\"content\":\"正文\"}]}}`\n\
             2. `assistant_notes` 与 `document` 必须分离：过程说明、检索依据、风险提示等只能出现在 `assistant_notes`；`document` 中只能是用户要求的最终交付物正文\n\
             3. 工具必须通过 API 工具接口调用，不得在正文里伪造工具调用\n\
-            4. 本会话首次正式起草前，必须调用一次 ask_user 提出 2-4 个必要问题（当事人与立场、标的与金额、关键条款或诉求）；仅当用户已明确给出全部关键事实，或对话中已有「以下是补充信息」答复时方可跳过；用户答复后禁止重复提问\n\
+            4. 本会话首次正式起草前，必须调用一次 ask_user 提出 2-4 个必要问题（当事人与立场、标的与金额、关键条款或诉求）；仅当用户已明确给出全部关键事实，或对话中已有「以下是补充信息」答复时方可跳过；用户答复后禁止重复提问。互斥事实（如代理哪一方、是否已起诉）用单选；可同时成立的类型/范围/关切重点设 `allow_multiple: true`\n\
             5. `document.sections` 必须完整承载最终文档；禁止把交付物正文拆散到 `assistant_notes` 或多个并列标题中\n\n",
         )
     };
@@ -165,6 +166,24 @@ pub fn build_system_prompt(
     prompt
 }
 
+fn build_qa_system_prompt() -> String {
+    String::from(
+        "你是一位专业的中国法律 AI 助手，面向中国大陆执业律师，进行**法律问答 / 咨询解惑**。\n\n\
+        重要声明：你的所有输出均为供律师参考的法律研究意见，非法律建议、非法律结论，不能替代执业律师。\n\n\
+        ## 模式：法律问答（Q&A）\n\
+        1. 目标是回答用户的具体法律问题（法条含义、可行性、风险、流程、构成要件等），**不产出成稿文书，也不基于本地案卷写诉讼方案**。\n\
+        2. 先检索后作答：凡涉及具体法条、司法解释或案例的引用，必须先用检索工具核验再写入回答；未经检索核验的引用一律标注 [待律师复核]。\n\
+        3. 纯定义性、流程性或常识性问题可直接简明作答，无需强行检索。\n\
+        4. 信息不足时，可在回答中分情形讨论，或用一句话提示需要补充的关键事实；**不强制调用 ask_user**，不要因缺少信息就停下不答。\n\
+        5. 工具必须通过 API 工具接口调用，不得在正文里伪造工具调用或编造检索结果。\n\n\
+        ## 输出格式\n\
+        1. 直接用 **Markdown** 作答（结论先行，再给依据与提示），**不要输出 JSON 文书结构**。\n\
+        2. 引用法条/案例时标注精确条文号或案号与来源层级。\n\
+        3. 如权威来源冲突，陈述冲突并给出更稳妥路线。\n\
+        4. 如用户其实需要一份成稿文书，提示其改为「起草」需求，不要在问答模式里直接产出正式文书。\n\n",
+    )
+}
+
 fn build_evidence_system_prompt() -> String {
     String::from(
         "你是一位专业的中国法律 AI 助手，正在基于用户授权的本地案卷目录进行**证据驱动**分析与写作。\n\n\
@@ -172,7 +191,7 @@ fn build_evidence_system_prompt() -> String {
         1. **禁止臆测**：所有事实与结论必须来自 workspace 工具检索到的 chunk 或文件\n\
         2. **禁止**将整目录内容拼进回复；必须通过 `search_workspace` → `read_chunk` / `read_file` 逐条取证\n\
         3. 关键结论必须标注来源：`relative_path` 与/或 `chunk_id`\n\
-        4. 信息不足时调用 ask_user 提出必要澄清；无法补足时标注「不足以判断」，不得编造\n\n\
+        4. 信息不足时调用 ask_user 提出必要澄清；无法补足时标注「不足以判断」，不得编造。互斥事实用单选；可同时选多项的偏好/范围题设 `allow_multiple: true`\n\n\
         ## 五阶段工作流（按序执行）\n\
         1. **Plan**：在思考中规划文档大纲与每节拟用的 `search_queries`；不要把大纲作为单独的文本回复发送（单独发送会被当作最终答案），规划后直接进入下一阶段\n\
         2. **Clarify（首轮强制）**：本会话首次起草诉讼方案/分析报告前，必须调用一次 `ask_user`，确认：委托方立场（代理哪一方）、核心诉求与金额、程序阶段或管辖偏好。仅当用户消息或对话中的「以下是补充信息」答复已明确这些要点时方可跳过；用户答复后禁止重复提问\n\
@@ -313,7 +332,10 @@ pub fn build_law_tool_definitions() -> Vec<ToolDefinition> {
     ]
 }
 
-pub fn build_builtin_tool_definitions(include_workspace: bool) -> Vec<ToolDefinition> {
+pub fn build_builtin_tool_definitions(
+    mode: AgentMode,
+    include_workspace: bool,
+) -> Vec<ToolDefinition> {
     let mut tools = vec![
         ToolDefinition {
             tool_type: "function".into(),
@@ -375,7 +397,7 @@ pub fn build_builtin_tool_definitions(include_workspace: bool) -> Vec<ToolDefini
             tool_type: "function".into(),
             function: FunctionDefinition {
                 name: "ask_user".into(),
-                description: "当正式起草或分析前缺少关键事实时，向用户提出 2-4 个必要澄清问题；每题给出可点击选项，并允许用户自由输入。调用后本轮会暂停等待用户回答。".into(),
+                description: "当正式起草或分析前缺少关键事实时，向用户提出 2-4 个必要澄清问题；每题给出可点击选项，并允许用户自由输入。互斥事实用单选（默认）；可同时成立的偏好/范围/类型组合题设 allow_multiple=true。调用后本轮会暂停等待用户回答。".into(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -404,6 +426,10 @@ pub fn build_builtin_tool_definitions(include_workspace: bool) -> Vec<ToolDefini
                                             "required": ["label"]
                                         }
                                     },
+                                    "allow_multiple": {
+                                        "type": "boolean",
+                                        "description": "是否允许多选；默认 false（单选）。用于业务类型、关切重点、已接入系统等可同时选多项的问题"
+                                    },
                                     "allow_free_text": { "type": "boolean", "description": "是否允许自由输入，默认 true" }
                                 },
                                 "required": ["question", "options"]
@@ -415,6 +441,12 @@ pub fn build_builtin_tool_definitions(include_workspace: bool) -> Vec<ToolDefini
             },
         },
     ];
+
+    // Q&A (法律问答) answers in chat and never produces a document — keep the
+    // tool surface aligned with build_qa_system_prompt's "不产出成稿文书".
+    if mode == AgentMode::Chat {
+        tools.retain(|t| t.function.name != "generate_docx");
+    }
 
     tools.extend(build_law_tool_definitions());
 
@@ -435,7 +467,7 @@ mod tests {
 
     #[test]
     fn evidence_prompt_mandates_clarify_research_and_review_markers() {
-        let prompt = build_system_prompt(&[], None, None, true, &[]);
+        let prompt = build_system_prompt(&[], None, None, AgentMode::Evidence, &[]);
         assert!(prompt.contains("Clarify（首轮强制）"));
         assert!(prompt.contains("ask_user"));
         assert!(prompt.contains("Research（法律检索）"));
@@ -448,10 +480,23 @@ mod tests {
 
     #[test]
     fn draft_prompt_mandates_first_turn_clarification_and_gate() {
-        let prompt = build_system_prompt(&[], None, None, false, &[]);
+        let prompt = build_system_prompt(&[], None, None, AgentMode::Draft, &[]);
         assert!(prompt.contains("必须调用一次 ask_user"));
         assert!(prompt.contains("research-gate"));
         assert!(prompt.contains("引用书写规范"));
+    }
+
+    #[test]
+    fn qa_prompt_keeps_gate_but_drops_drafting_mandates() {
+        let prompt = build_system_prompt(&[], None, None, AgentMode::Chat, &[]);
+        // Research discipline still applies to Q&A citations.
+        assert!(prompt.contains("research-gate"));
+        assert!(prompt.contains("引用书写规范"));
+        assert!(prompt.contains("法律问答"));
+        // But none of the drafting-only mandates leak into Q&A.
+        assert!(!prompt.contains("文书输出格式（起草时强制）"));
+        assert!(!prompt.contains("必须输出一个 JSON 对象"));
+        assert!(!prompt.contains("必须调用一次 ask_user"));
     }
 
     #[test]
@@ -466,7 +511,7 @@ mod tests {
         assert!(!mapping.contains("`mcp__wenshu__search_cases`"));
         assert!(mapping.contains("清单之外的检索工具不存在"));
 
-        let prompt = build_system_prompt(&[], None, None, true, &tools);
+        let prompt = build_system_prompt(&[], None, None, AgentMode::Evidence, &tools);
         assert!(prompt.contains("`mcp__law-database__search_laws`"));
     }
 
@@ -475,6 +520,18 @@ mod tests {
         let mapping = build_retrieval_tool_mapping(&[]);
         assert!(mapping.contains("未接入任何法律检索工具"));
         assert!(mapping.contains("[待律师复核]"));
+    }
+
+    #[test]
+    fn qa_mode_excludes_generate_docx_but_other_modes_keep_it() {
+        let has_docx = |mode| {
+            build_builtin_tool_definitions(mode, false)
+                .iter()
+                .any(|t| t.function.name == "generate_docx")
+        };
+        assert!(!has_docx(AgentMode::Chat), "Q&A mode must not offer generate_docx");
+        assert!(has_docx(AgentMode::Draft));
+        assert!(has_docx(AgentMode::Evidence));
     }
 
     #[test]

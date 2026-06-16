@@ -1,8 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import type { FileAttachment, Conversation, Message } from "../stores/conversation";
 import type { ContextRefPayload } from "../types/contextRefs";
-import type { ClassifyAgentModeResult } from "../types/agentMode";
+import type { AgentMode, ClassifyAgentModeResult } from "../types/agentMode";
 import type { ParseLegalDocumentResponse } from "../types/legal";
 import type { AgentTraceEvent } from "../types/trace";
 import type { MessageMetadata } from "../types/workflow";
@@ -21,6 +22,10 @@ export interface SendMessageRequest {
    * Each ref must lie under an allowed directory and is resolved server-side.
    */
   context_refs?: ContextRefPayload[];
+  /** Mode resolved by the client's per-turn pre-flight; backend honors it and
+   *  skips its own classification. */
+  forced_mode?: AgentMode;
+  forced_label?: string;
 }
 
 export interface StreamChunk {
@@ -127,6 +132,9 @@ export interface LlmProvider {
 export async function classifyAgentMode(req: {
   content: string;
   context_refs?: ContextRefPayload[];
+  current_mode?: AgentMode;
+  current_task_label?: string;
+  has_active_document?: boolean;
 }): Promise<ClassifyAgentModeResult> {
   return invoke("classify_agent_mode", { req });
 }
@@ -317,6 +325,19 @@ export async function prepareAttachment(path: string): Promise<FileAttachment> {
   return invoke("prepare_attachment", { path });
 }
 
+export interface DroppedPathKind {
+  path: string;
+  is_dir: boolean;
+  exists: boolean;
+}
+
+/** Classify OS-dropped paths into file vs. directory so the composer can attach them. */
+export async function classifyDroppedPaths(
+  paths: string[],
+): Promise<DroppedPathKind[]> {
+  return invoke("classify_dropped_paths", { paths });
+}
+
 /** Grant one-time read access to a path outside the current allowlist. */
 export async function grantPathAccess(path: string): Promise<void> {
   return invoke("grant_path_access", { path });
@@ -492,6 +513,16 @@ export interface SubmitFeedbackRequest {
   rating: "up" | "down";
   comment?: string;
   dimensions?: string[];
+  app_version?: string;
+  skills_version?: string | null;
+}
+
+export async function getAppVersion(): Promise<string> {
+  try {
+    return await getVersion();
+  } catch {
+    return "unknown";
+  }
 }
 
 export async function getSkilloptSettings(): Promise<SkillOptSettings> {

@@ -1,6 +1,6 @@
 import { createSignal, Show, For } from "solid-js";
 import type { Message } from "../../stores/conversation";
-import { submitMessageFeedback } from "../../services/api";
+import { submitMessageFeedback, getAppVersion, getSyncSettings } from "../../services/api";
 import { useConversation } from "../../stores/conversation";
 import type { MessageMetadata } from "../../types/workflow";
 import "./MessageFeedback.css";
@@ -47,6 +47,10 @@ export function MessageFeedback(props: MessageFeedbackProps) {
     setSubmitting(true);
     const skill = skillFromMessage(props.message);
     try {
+      const [appVersion, syncSettings] = await Promise.all([
+        getAppVersion(),
+        getSyncSettings(),
+      ]);
       await submitMessageFeedback({
         message_id: props.message.id,
         conversation_id: convId,
@@ -55,6 +59,8 @@ export function MessageFeedback(props: MessageFeedbackProps) {
         rating,
         comment: comment().trim() || undefined,
         dimensions: dims().length ? dims() : undefined,
+        app_version: appVersion,
+        skills_version: syncSettings.skills_version ?? undefined,
       });
       persistMessageFeedback(props.message.id, {
         rating,

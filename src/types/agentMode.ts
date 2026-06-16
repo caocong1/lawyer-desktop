@@ -1,10 +1,14 @@
 export type AgentMode = "chat" | "draft" | "evidence";
 
+/** Intent transition relative to the committed task. Drives the switch-confirm gate. */
+export type AgentModeAction = "continue" | "switch" | "aside";
+
 export interface ClassifyAgentModeResult {
   mode: AgentMode;
   label: string;
   reason: string;
-  source?: "llm" | "fallback";
+  action?: AgentModeAction;
+  source?: "llm" | "fallback" | "override";
   fallback_reason?: string;
   diagnostic?: string;
 }
@@ -16,7 +20,7 @@ export function agentModeLabel(mode: AgentMode | "idle"): string {
     case "evidence":
       return "案情分析";
     case "chat":
-      return "法律咨询";
+      return "法律问答";
     default:
       return "墨律";
   }
@@ -29,7 +33,7 @@ export function agentModeStatus(mode: AgentMode | "idle"): string {
     case "evidence":
       return "分析中";
     case "chat":
-      return "咨询中";
+      return "解答中";
     default:
       return "已就绪";
   }

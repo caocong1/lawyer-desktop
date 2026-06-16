@@ -159,12 +159,25 @@ pub struct SendMessageRequest {
     pub attachments: Option<Vec<FileAttachment>>,
     pub context_refs: Option<Vec<ContextRef>>,
     pub ui_hidden: Option<bool>,
+    /// When the client already resolved the mode (per-turn pre-flight classify
+    /// or a confirmed switch), the backend honors it and skips re-classifying.
+    #[serde(default)]
+    pub forced_mode: Option<String>,
+    #[serde(default)]
+    pub forced_label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClassifyAgentModeRequest {
     pub content: String,
     pub context_refs: Option<Vec<ContextRef>>,
+    /// Mode of the task currently owning the right-side artifact, if any.
+    #[serde(default)]
+    pub current_mode: Option<String>,
+    #[serde(default)]
+    pub current_task_label: Option<String>,
+    #[serde(default)]
+    pub has_active_document: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -196,6 +209,9 @@ pub async fn classify_agent_mode(
         has_directory_ref,
         has_file_ref,
         directory_aliases,
+        current_mode: req.current_mode,
+        current_task_label: req.current_task_label,
+        has_active_document: req.has_active_document.unwrap_or(false),
     };
 
     let fast = engine
@@ -337,6 +353,11 @@ fn build_classify_context(
         has_directory_ref,
         has_file_ref,
         directory_aliases,
+        // send_message's own classify is a fallback (the client normally passes
+        // forced_mode) and has no committed-task context, so action stays continue.
+        current_mode: None,
+        current_task_label: None,
+        has_active_document: false,
     }
 }
 
@@ -561,11 +582,38 @@ pub async fn send_message(
         }),
     );
     let classify_started = Instant::now();
-    let fast = engine
-        .get_fast_provider()
-        .await
-        .map_err(|e| turn_fail(&tracer, "fast_provider", e.to_string()))?;
-    let classification = agent_classifier::classify_agent_mode(fast.as_ref(), &classify_ctx).await;
+    // The client pre-classifies each turn (with committed-task context) and
+    // passes the resolved mode as forced_mode; honor it and skip re-guessing.
+    // Only fall back to a server-side classify when no override is supplied.
+    let forced = req.forced_mode.as_deref().and_then(|m| {
+        let parsed = agent_classifier::parse_mode_str(m);
+        if parsed.is_none() {
+            log::warn!("ignoring unrecognized forced_mode from client: {:?}", m);
+        }
+        parsed
+    });
+    let classification = if let Some(mode) = forced {
+        ClassifyResult {
+            label: req
+                .forced_label
+                .clone()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| mode.ui_label().to_string()),
+            mode,
+            reason: "客户端已确认事项类型".into(),
+            action: "continue".into(),
+            source: "override".into(),
+            fallback_reason: None,
+            diagnostic: None,
+        }
+    } else {
+        let fast = engine
+            .get_fast_provider()
+            .await
+            .map_err(|e| turn_fail(&tracer, "fast_provider", e.to_string()))?;
+        agent_classifier::classify_agent_mode(fast.as_ref(), &classify_ctx).await
+    };
+    let mode = classification.mode;
     let evidence_mode = classification.mode == AgentMode::Evidence;
     tracer.emit(
         "classify_result",
@@ -582,7 +630,7 @@ pub async fn send_message(
 
     let _ = app.emit("agent-mode-classified", &classification);
 
-    let tools = build_all_tools(&mcp, evidence_mode).await;
+    let tools = build_all_tools(&mcp, mode, evidence_mode).await;
     {
         let (mcp_tools, builtin_tools): (Vec<String>, Vec<String>) = tools
             .iter()
@@ -612,7 +660,7 @@ pub async fn send_message(
         &all_skills,
         research_gate_ref,
         active_skill.as_ref(),
-        evidence_mode,
+        mode,
         &retrieval_tool_names,
         history,
         user_content.clone(),
@@ -806,7 +854,7 @@ pub async fn send_message(
                         &all_skills,
                         research_gate_ref,
                         active_skill.as_ref(),
-                        evidence_mode,
+                        mode,
                         &retrieval_tool_names,
                     );
                 }
@@ -848,7 +896,7 @@ pub async fn send_message(
                     &all_skills,
                     research_gate_ref,
                     active_skill.as_ref(),
-                    evidence_mode,
+                    mode,
                     &retrieval_tool_names,
                 );
             }

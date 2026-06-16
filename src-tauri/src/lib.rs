@@ -493,6 +493,7 @@ pub fn run() {
             commands::files::read_file_content,
             commands::files::list_directory,
             commands::files::prepare_attachment,
+            commands::files::classify_dropped_paths,
             commands::workspace::bind_workspace,
             commands::workspace::get_workspace_index_status,
             commands::workspace::search_workspace,

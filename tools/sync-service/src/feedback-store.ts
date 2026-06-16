@@ -96,3 +96,14 @@ export function mergeTriage(
     triage: triageMap[r.remote_id] ?? defaultTriage(),
   }));
 }
+
+/** 提交时写入 payload 的版本优先，其次为同步批次级版本 */
+export function effectiveAppVersion(item: FeedbackWithTriage): string {
+  return item.payload.app_version?.trim() || item.app_version || "—";
+}
+
+export function effectiveSkillsVersion(item: FeedbackWithTriage): string {
+  const fromPayload = item.payload.skills_version?.trim();
+  if (fromPayload) return fromPayload;
+  return item.skills_version?.trim() || "—";
+}

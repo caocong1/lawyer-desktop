@@ -170,6 +170,9 @@ pub async fn test_fast_provider(
         has_directory_ref: false,
         has_file_ref: false,
         directory_aliases: vec![],
+        current_mode: None,
+        current_task_label: None,
+        has_active_document: false,
     };
     let result = agent_classifier::classify_agent_mode(&provider, &ctx).await;
     if result.source == "fallback" {

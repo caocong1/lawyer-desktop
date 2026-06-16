@@ -192,6 +192,9 @@ button { font-family: inherit; }
 .composer { flex: 0 0 auto; padding: 14px 22px 18px; border-top: 1px solid var(--line); }
 .input-box { border: 1px solid var(--line); border-radius: 13px; background: var(--surface); padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; transition: .15s; }
 .input-box:focus-within { border-color: var(--accent); }
+.input-box.drag-active { position: relative; border-color: var(--accent); border-style: dashed; background: var(--accent-soft); }
+.input-box .drop-overlay { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; border-radius: 13px; background: color-mix(in srgb, var(--accent-soft) 92%, transparent); color: var(--accent); font-family: var(--serif); font-size: 13px; pointer-events: none; }
+.input-box .drop-overlay svg { width: 22px; height: 22px; }
 .input-box textarea { border: none; outline: none; resize: none; background: transparent; font-family: var(--serif); font-size: 13.5px; line-height: 1.6; color: var(--ink); width: 100%; min-height: 22px; max-height: 120px; }
 .input-box textarea::placeholder { color: var(--muted); }
 .input-row { display: flex; align-items: center; gap: 12px; }

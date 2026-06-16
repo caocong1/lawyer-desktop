@@ -13,7 +13,7 @@ use crate::documents::docx_gen;
 use crate::llm::types::{ChatMessage, ToolCall, ToolDefinition};
 use crate::mcp::manager::{mcp_result_to_text, McpManager};
 use crate::security::path_sandbox::PathSandbox;
-use crate::skills::{loader::SkillMetadata, router, SkillRegistry};
+use crate::skills::{agent_classifier::AgentMode, loader::SkillMetadata, router, SkillRegistry};
 
 use crate::workspace::{
     get_status, list_files, read_chunk as ws_read_chunk, read_file_relative, search,
@@ -39,6 +39,8 @@ pub struct AskUserQuestion {
     pub id: Option<String>,
     pub question: String,
     pub options: Vec<AskUserOption>,
+    /// When true, the user may select multiple options; default single-select.
+    pub allow_multiple: Option<bool>,
     pub allow_free_text: Option<bool>,
 }
 
@@ -87,8 +89,12 @@ async fn resolve_read_path(ctx: &ToolContext<'_>, path: &str) -> Result<PathBuf,
     ctx.sandbox.validate(path).map_err(|e| e.to_string())
 }
 
-pub async fn build_all_tools(mcp: &McpManager, include_workspace: bool) -> Vec<ToolDefinition> {
-    let mut tools = router::build_builtin_tool_definitions(include_workspace);
+pub async fn build_all_tools(
+    mcp: &McpManager,
+    mode: AgentMode,
+    include_workspace: bool,
+) -> Vec<ToolDefinition> {
+    let mut tools = router::build_builtin_tool_definitions(mode, include_workspace);
     tools.extend(mcp.build_tool_definitions().await);
     tools
 }
@@ -528,7 +534,7 @@ pub fn build_messages(
     all_skills: &[SkillMetadata],
     research_gate: Option<&str>,
     active_skill: Option<&SkillMetadata>,
-    evidence_mode: bool,
+    mode: AgentMode,
     retrieval_tools: &[String],
     history: Vec<ChatMessage>,
     user_content: String,
@@ -537,7 +543,7 @@ pub fn build_messages(
         all_skills,
         research_gate,
         active_skill,
-        evidence_mode,
+        mode,
         retrieval_tools,
     );
 
@@ -568,19 +574,50 @@ pub fn update_system_prompt(
     all_skills: &[SkillMetadata],
     research_gate: Option<&str>,
     active_skill: Option<&SkillMetadata>,
-    evidence_mode: bool,
+    mode: AgentMode,
     retrieval_tools: &[String],
 ) {
     let system_prompt = router::build_system_prompt(
         all_skills,
         research_gate,
         active_skill,
-        evidence_mode,
+        mode,
         retrieval_tools,
     );
     if let Some(first) = messages.first_mut() {
         if first.role == "system" {
             first.content = system_prompt;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_ask_user_args_preserves_allow_multiple() {
+        let args = json!({
+            "questions": [{
+                "question": "涉及哪类业务？",
+                "allow_multiple": true,
+                "options": [{ "label": "租赁" }, { "label": "买卖" }]
+            }]
+        });
+        let req = parse_ask_user_args(&args).expect("parse");
+        assert_eq!(req.questions.len(), 1);
+        assert_eq!(req.questions[0].allow_multiple, Some(true));
+    }
+
+    #[test]
+    fn parse_ask_user_args_defaults_single_select() {
+        let args = json!({
+            "questions": [{
+                "question": "代理哪一方？",
+                "options": [{ "label": "原告" }]
+            }]
+        });
+        let req = parse_ask_user_args(&args).expect("parse");
+        assert_eq!(req.questions[0].allow_multiple, None);
     }
 }

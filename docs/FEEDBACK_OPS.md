@@ -23,6 +23,8 @@
 cd tools/sync-service && bun run dev
 ```
 
+管理 Web 页：**http://127.0.0.1:8787/admin**（汇总、筛选、分诊、导出；设了 `SYNC_API_KEY` 时需在页内填 token）。
+
 ### 2. 查看反馈汇总
 
 ```bash
@@ -96,6 +98,8 @@ node tools/publish-skill.mjs --root ../ai-for-china-legal --version 2026.06.15.1
 | `since` | `2026-06-01` | ISO 时间下限 |
 | `until` | `2026-06-15` | ISO 时间上限 |
 | `limit` | `50` | 默认 100 |
+
+每条反馈记录 **App 版本**（`app_version`）与 **Skill 包版本**（`skills_version`）：客户端在提交时写入 outbox payload，服务端入库时以 payload 为准（同步批次级版本作兜底）。管理台列表、汇总与 Markdown 导出均包含这两项。
 
 Triage 状态保存在 `tools/sync-service/data/feedback-triage.json`。
 

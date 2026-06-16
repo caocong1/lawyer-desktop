@@ -1,5 +1,6 @@
 import { createSignal } from "solid-js";
-import type { AgentMode } from "../types/agentMode";
+import { agentModeLabel } from "../types/agentMode";
+import type { AgentMode, ClassifyAgentModeResult } from "../types/agentMode";
 import type { ContextRefPayload } from "../types/contextRefs";
 import type {
   Article,
@@ -88,6 +89,14 @@ export interface CiteState {
   open: boolean;
   tab: "law" | "case";
   key: string | null;
+}
+
+interface PendingModeSwitch {
+  newMode: AgentMode;
+  newLabel: string;
+  curLabel: string;
+  text: string;
+  refs: ContextRefPayload[];
 }
 
 const emptyDocMeta = (): DocMeta => ({
@@ -258,6 +267,7 @@ function normalizeClarification(payload: Record<string, unknown>): Clarification
         id: typeof q.id === "string" ? q.id : `q${index + 1}`,
         question,
         options,
+        allow_multiple: q.allow_multiple === true,
         allow_free_text: q.allow_free_text !== false,
       };
     })
@@ -423,6 +433,18 @@ function applyTraceToWorkflow(workflow: WorkflowState, e: AgentTraceEvent): Work
 const [workspacePrompt, setWorkspacePrompt] = createSignal<string>("");
 const [workspaceMode, setWorkspaceMode] = createSignal<AgentMode | "idle">("idle");
 const [workspaceModeLabel, setWorkspaceModeLabel] = createSignal<string>("");
+/** The producing task that owns the right-side artifact (draft/evidence), set
+ *  only when such a turn succeeds. Drives the header/preview title so a mid-task
+ *  Q&A (aside) turn doesn't visually hijack the committed document. */
+const [committedMode, setCommittedMode] = createSignal<AgentMode | null>(null);
+const [committedLabel, setCommittedLabel] = createSignal<string>("");
+/** Pending switch-confirmation: set when a turn's intent would replace an
+ *  existing artifact; ChatPanel renders ModeSwitchCard until the user decides. */
+const [pendingModeSwitch, setPendingModeSwitch] = createSignal<PendingModeSwitch | null>(null);
+/** Guards a second turn from being classified while a pre-flight classify is
+ *  still awaiting. The send button is also disabled during sends, but this also
+ *  covers programmatic/rapid sends that would otherwise race. */
+let preflightInFlight = false;
 const [legalDocument, setLegalDocument] = createSignal<LegalDocumentModel | null>(null);
 const [documentMarkdown, setDocumentMarkdown] = createSignal("");
 const [documentId, setDocumentId] = createSignal<string | null>(null);
@@ -459,6 +481,11 @@ function clearDocumentState() {
   setDocMeta(emptyDocMeta());
   setArticles([]);
   setCitationGroups(emptyCitations());
+  // The committed producing task is defined by the presence of an artifact;
+  // clearing the artifact must clear it too, or it leaks across conversations
+  // (switchConversation / selectConversation route through here).
+  setCommittedMode(null);
+  setCommittedLabel("");
 }
 
 type DocumentOrigin = "live" | "restore";
@@ -555,10 +582,14 @@ async function restoreDocumentFromMessages() {
       if (meta.citation_audit) {
         setCitationGroups(auditToCitationGroups(meta.citation_audit));
       }
+      setCommittedMode("evidence");
+      setCommittedLabel(meta.workflow?.mode_label || "案情分析");
       return;
     }
     if (meta?.workflow?.clarification) continue;
     if (await tryApplyDocumentFromContent(m.content, "restore")) {
+      setCommittedMode("draft");
+      setCommittedLabel(meta?.workflow?.mode_label || docMeta().title || "文书起草");
       if (meta?.citation_audit) {
         setCitationGroups(mergeAuditIntoGroups(citationGroups(), meta.citation_audit));
       }
@@ -983,6 +1014,8 @@ export function useConversation() {
             docMeta().title || "法律文书",
           );
           contentHidden = true;
+          setCommittedMode("draft");
+          setCommittedLabel(workspaceModeLabel() || docMeta().title || "文书起草");
         } else {
           // Keep any previously rendered document — the failed turn produced nothing usable.
           setDraftWorkflowActive(false);
@@ -1002,15 +1035,25 @@ export function useConversation() {
           applyMarkdownReport(stripReportPreamble(cleaned));
           displayContent = evidenceCompletionSummary(workspaceModeLabel() || "案卷分析报告");
           contentHidden = true;
+          setCommittedMode("evidence");
+          setCommittedLabel(workspaceModeLabel() || "案情分析");
         }
       } else {
-        const envelope = extractDraftOutputEnvelope(content);
-        const parsed = await tryApplyDocumentFromContent(content);
-        if (parsed) {
-          displayContent = envelope.assistantMarkdown
-            ? draftDisplayContent(envelope.assistantMarkdown, docMeta().title || "法律文书")
-            : draftCompletionSummary(docMeta().title || "法律文书");
-          contentHidden = true;
+        // Q&A (法律问答) turn — render the answer as a plain chat message; never
+        // parse it into a document. Strip any tool-call residue first.
+        const cleaned = sanitizeLlmDocumentContent(content);
+        if (!cleaned || containsToolLeakage(cleaned)) {
+          displayContent =
+            "**回答未完成：** 模型返回了工具调用残留，未能生成可读回答。请重试，或检查模型是否支持标准工具调用。";
+          shouldSuggest = false;
+        } else {
+          displayContent = cleaned;
+          contentHidden = false;
+          // A Q&A turn while a producing task still owns the preview is an
+          // "aside": answer inline and reassure the user the draft is intact.
+          if (committedMode()) {
+            displayContent = `${cleaned}\n\n> 已按问答回复，右侧「${committedLabel() || "当前任务"}」内容已保留。`;
+          }
         }
       }
 
@@ -1192,20 +1235,13 @@ export function useConversation() {
     return sendChatMessage(answerTextFromClarification(answers), { uiHidden: true });
   }
 
-  async function resolveAgentMode(content: string, refs: ContextRefPayload[]) {
-    const result = await classifyAgentMode({
-      content,
-      context_refs: refs.length > 0 ? refs : undefined,
-    });
-    setWorkspaceMode(result.mode);
-    setWorkspaceModeLabel(result.label);
-    return result;
-  }
-
   async function initWorkspace(prompt: string, conversationId: string) {
     setWorkspacePrompt(prompt);
     setWorkspaceMode("idle");
     setWorkspaceModeLabel("");
+    setCommittedMode(null);
+    setCommittedLabel("");
+    setPendingModeSwitch(null);
     setDocMode("preview");
     setJustAddedId(null);
     setCiteState({ open: false, tab: "law", key: null });
@@ -1217,50 +1253,17 @@ export function useConversation() {
     clearDocumentState();
     await loadMessages(conversationId);
     await restoreDocumentFromMessages();
-    const trimmed = prompt.trim();
-    const refs = mergeDirectoryRefs(trimmed, pendingContextRefs());
-    if (trimmed || refs.length > 0) {
-      try {
-        await resolveAgentMode(trimmed || "分析附加的本地资料", refs);
-      } catch (e) {
-        console.warn("意图分类失败:", e);
-      }
-    }
   }
 
-  function sendChatMessage(
-    text: string,
-    options: { uiHidden?: boolean } = {},
+  // Actually fire the turn. The caller has already shown the user bubble and
+  // bound any workspaces; forced_mode tells the backend the resolved mode so it
+  // does not re-classify.
+  function dispatchTurn(
+    convId: string,
+    trimmed: string,
+    refs: ContextRefPayload[],
+    opts: { uiHidden?: boolean; forcedMode?: AgentMode; forcedLabel?: string } = {},
   ): Promise<void> {
-    const convId = activeConversationId();
-    const trimmed = text.trim();
-    const allRefs = mergeDirectoryRefs(trimmed, pendingContextRefs());
-    // Resolve inline @ mentions: if user used @refs in text, use only those; otherwise use all attachments
-    const inlineRefs = resolveInlineMentions(trimmed, allRefs, inlineMentionPaths());
-    const refs = inlineRefs.length > 0 ? inlineRefs : allRefs;
-    if (!convId || isStreaming()) return Promise.resolve();
-    if (!trimmed && refs.length === 0) return Promise.resolve();
-    clearContextRefs();
-    clearInlineMentions();
-
-    for (const ref of refs) {
-      if (ref.kind === "directory") {
-        void bindWorkspace(ref.path, convId ?? undefined).catch((e) => {
-          console.error("绑定 workspace 失败:", e);
-        });
-      }
-    }
-
-    if (!options.uiHidden) {
-      addMessage({
-        id: `pending-user-${Date.now()}`,
-        conversation_id: convId,
-        role: "user",
-        content: trimmed || (refs.length > 0 ? `[已附加 ${refs.length} 项本地资料]` : ""),
-        created_at: new Date().toISOString(),
-      });
-    }
-
     setActiveDraftResponse(false);
     setActiveEvidenceResponse(false);
     setDraftWorkflowActive(false);
@@ -1270,7 +1273,9 @@ export function useConversation() {
       conversation_id: convId,
       content: trimmed,
       context_refs: refs.length > 0 ? refs : undefined,
-      ui_hidden: options.uiHidden || undefined,
+      ui_hidden: opts.uiHidden || undefined,
+      forced_mode: opts.forcedMode,
+      forced_label: opts.forcedLabel,
     })
       .then((messageId) => {
         void loadConversations();
@@ -1293,6 +1298,112 @@ export function useConversation() {
       });
   }
 
+  async function sendChatMessage(
+    text: string,
+    options: { uiHidden?: boolean } = {},
+  ): Promise<void> {
+    const convId = activeConversationId();
+    const trimmed = text.trim();
+    const allRefs = mergeDirectoryRefs(trimmed, pendingContextRefs());
+    // Resolve inline @ mentions: if user used @refs in text, use only those; otherwise use all attachments
+    const inlineRefs = resolveInlineMentions(trimmed, allRefs, inlineMentionPaths());
+    const refs = inlineRefs.length > 0 ? inlineRefs : allRefs;
+    if (!convId || isStreaming() || preflightInFlight) return;
+    if (!trimmed && refs.length === 0) return;
+    // A fresh user send supersedes any unanswered switch prompt.
+    if (!options.uiHidden) setPendingModeSwitch(null);
+    clearContextRefs();
+    clearInlineMentions();
+
+    for (const ref of refs) {
+      if (ref.kind === "directory") {
+        void bindWorkspace(ref.path, convId ?? undefined).catch((e) => {
+          console.error("绑定 workspace 失败:", e);
+        });
+      }
+    }
+
+    if (!options.uiHidden) {
+      addMessage({
+        id: `pending-user-${Date.now()}`,
+        conversation_id: convId,
+        role: "user",
+        content: trimmed || (refs.length > 0 ? `[已附加 ${refs.length} 项本地资料]` : ""),
+        created_at: new Date().toISOString(),
+      });
+    }
+
+    // System follow-ups (clarification answers) continue the committed task
+    // deterministically — never re-classify or interrupt them.
+    if (options.uiHidden) {
+      return dispatchTurn(convId, trimmed, refs, {
+        forcedMode: committedMode() ?? undefined,
+        forcedLabel: committedLabel() || undefined,
+      });
+    }
+
+    // Per-turn intent pre-flight (context-aware). On failure, fall back to
+    // continuing the committed task (or letting the backend classify).
+    let result: ClassifyAgentModeResult | null = null;
+    preflightInFlight = true;
+    try {
+      result = await classifyAgentMode({
+        content: trimmed || "分析附加的本地资料",
+        context_refs: refs.length > 0 ? refs : undefined,
+        current_mode: committedMode() ?? undefined,
+        current_task_label: committedLabel() || undefined,
+        has_active_document: committedMode() != null,
+      });
+    } catch (e) {
+      console.warn("意图分类失败:", e);
+    } finally {
+      preflightInFlight = false;
+    }
+
+    // Only a genuine switch away from an existing artifact interrupts the user.
+    const committed = committedMode();
+    if (result && result.action === "switch" && committed) {
+      setPendingModeSwitch({
+        newMode: result.mode,
+        newLabel: result.label || agentModeLabel(result.mode),
+        curLabel: committedLabel() || agentModeLabel(committed),
+        text: trimmed,
+        refs,
+      });
+      return;
+    }
+
+    return dispatchTurn(convId, trimmed, refs, {
+      forcedMode: result?.mode ?? committed ?? undefined,
+      forcedLabel: result?.label ?? (committed ? committedLabel() : undefined),
+    });
+  }
+
+  /** Resolve a pending switch prompt: ① start the new task, or ② keep refining
+   *  the current one. ③ (custom) is handled in the UI via cancelModeSwitch. */
+  function confirmModeSwitch(choice: "switch" | "continue") {
+    const pending = pendingModeSwitch();
+    const convId = activeConversationId();
+    if (!pending || !convId) return;
+    setPendingModeSwitch(null);
+    const opts =
+      choice === "switch"
+        ? { forcedMode: pending.newMode, forcedLabel: pending.newLabel }
+        : {
+            forcedMode: committedMode() ?? undefined,
+            forcedLabel: committedLabel() || undefined,
+          };
+    void dispatchTurn(convId, pending.text, pending.refs, opts).catch(() => {
+      // dispatchTurn already reset the stream state; restore the card so the
+      // user can retry their choice instead of the prompt vanishing silently.
+      setPendingModeSwitch(pending);
+    });
+  }
+
+  function cancelModeSwitch() {
+    setPendingModeSwitch(null);
+  }
+
   function flashArticle(id: string) {
     setJustAddedId(id);
     setTimeout(() => setJustAddedId(null), 1700);
@@ -1312,6 +1423,11 @@ export function useConversation() {
     workspacePrompt,
     workspaceMode,
     workspaceModeLabel,
+    committedMode,
+    committedLabel,
+    pendingModeSwitch,
+    confirmModeSwitch,
+    cancelModeSwitch,
     legalDocument,
     documentMarkdown,
     documentId,

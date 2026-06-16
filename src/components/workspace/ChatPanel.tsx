@@ -1,5 +1,6 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { open } from "@tauri-apps/plugin-dialog";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { SolidMarkdown } from "solid-markdown";
 import remarkGfm from "remark-gfm";
 import type { AgentMode } from "../../types/agentMode";
@@ -9,7 +10,7 @@ import type { Message } from "../../stores/conversation";
 import { useTrace } from "../../stores/trace";
 import { containsToolLeakage } from "../../utils/legalDocument";
 import type { ContextRefPayload } from "../../types/contextRefs";
-import { onChatStream, onWorkspaceIndexProgress } from "../../services/api";
+import { classifyDroppedPaths, onChatStream, onWorkspaceIndexProgress } from "../../services/api";
 import type { ClarificationAnswer, WorkflowState } from "../../types/workflow";
 import {
   formatFullTime,
@@ -23,6 +24,7 @@ import { Icon } from "../icons/Icons";
 import { MentionMenu } from "../MentionMenu";
 import {
   ClarificationCard,
+  ModeSwitchCard,
   WorkflowNotice,
   WorkflowSuggestions,
 } from "./WorkflowProgressSteps";
@@ -97,6 +99,11 @@ export function ChatPanel(props: ChatPanelProps) {
     workspacePrompt,
     workspaceMode,
     workspaceModeLabel,
+    committedMode,
+    committedLabel,
+    pendingModeSwitch,
+    confirmModeSwitch,
+    cancelModeSwitch,
     isStreaming,
     streamingContent,
     streamPhase,
@@ -121,6 +128,7 @@ export function ChatPanel(props: ChatPanelProps) {
 
   const [text, setText] = createSignal("");
   const [attachMenuOpen, setAttachMenuOpen] = createSignal(false);
+  const [dragActive, setDragActive] = createSignal(false);
   const [mentionOpen, setMentionOpen] = createSignal(false);
   const [mentionQuery, setMentionQuery] = createSignal("");
   const [mentionIndex, setMentionIndex] = createSignal(0);
@@ -212,6 +220,7 @@ export function ChatPanel(props: ChatPanelProps) {
     let disposed = false;
     let unlistenProgress: (() => void) | undefined;
     let unlistenStream: (() => void) | undefined;
+    let unlistenDrop: (() => void) | undefined;
 
     void onWorkspaceIndexProgress((event) => {
       if (
@@ -241,11 +250,34 @@ export function ChatPanel(props: ChatPanelProps) {
       else unlistenStream = u;
     });
 
+    // OS file/folder drag-and-drop onto the window. dragDropEnabled must be true
+    // in tauri.conf.json or these events never fire. The event is webview-wide,
+    // so we accept a drop anywhere in the window and highlight the composer.
+    void getCurrentWebview()
+      .onDragDropEvent((event) => {
+        const payload = event.payload;
+        if (payload.type === "enter" || payload.type === "over") {
+          if (!props.sending()) setDragActive(true);
+        } else if (payload.type === "drop") {
+          setDragActive(false);
+          void handleDroppedPaths(payload.paths);
+        } else {
+          // "leave"
+          setDragActive(false);
+        }
+      })
+      .then((u) => {
+        if (disposed) u();
+        else unlistenDrop = u;
+      })
+      .catch((e) => console.error("注册拖放监听失败:", e));
+
     onCleanup(() => {
       disposed = true;
       document.removeEventListener("click", onDocClick);
       unlistenProgress?.();
       unlistenStream?.();
+      unlistenDrop?.();
     });
   });
 
@@ -341,12 +373,37 @@ export function ChatPanel(props: ChatPanelProps) {
     }
   }
 
+  // Attach OS-dropped paths the same way the picker does: classify each path
+  // (file vs. directory) on the backend, then route through addContextRef so
+  // directories get bound/indexed and files become @-mention refs.
+  async function handleDroppedPaths(paths: string[]) {
+    if (props.sending()) return;
+    const cleaned = paths.filter((p) => typeof p === "string" && p.trim().length > 0);
+    if (cleaned.length === 0) return;
+    try {
+      const kinds = await classifyDroppedPaths(cleaned);
+      for (const item of kinds) {
+        if (!item.exists) continue;
+        const kind: ContextRefPayload["kind"] = item.is_dir ? "directory" : "file";
+        addContextRef({
+          alias: pathToAlias(item.path, kind),
+          path: item.path,
+          kind,
+        });
+      }
+    } catch (e) {
+      console.error("处理拖放文件失败:", e);
+    }
+  }
+
+  // Prefer the committed producing task so a mid-task Q&A (aside) turn doesn't
+  // relabel the header away from the document the user is still working on.
   const title = () =>
     sessionTitle(
       workspacePrompt(),
       visibleMessages().length,
-      workspaceMode(),
-      workspaceModeLabel(),
+      committedMode() ?? workspaceMode(),
+      committedLabel() || workspaceModeLabel(),
     );
 
   const phaseLabel = () => {
@@ -548,10 +605,37 @@ export function ChatPanel(props: ChatPanelProps) {
             </div>
           </div>
         </Show>
+        <Show when={pendingModeSwitch()}>
+          {(pending) => (
+            <div class="msg msg-agent">
+              <div class="ava">墨</div>
+              <div class="agent-body">
+                <div class="agent-name">墨律 · 法律文书助理</div>
+                <ModeSwitchCard
+                  curLabel={pending().curLabel}
+                  newLabel={pending().newLabel}
+                  disabled={props.sending}
+                  onSwitch={() => confirmModeSwitch("switch")}
+                  onContinue={() => confirmModeSwitch("continue")}
+                  onCustom={() => {
+                    insertSuggestion(pending().text);
+                    cancelModeSwitch();
+                  }}
+                />
+              </div>
+            </div>
+          )}
+        </Show>
       </div>
 
       <div class="composer">
-        <div class="input-box">
+        <div class="input-box" classList={{ "drag-active": dragActive() }}>
+          <Show when={dragActive()}>
+            <div class="drop-overlay">
+              <Icon name="attach" />
+              <span>拖放文件或文件夹，作为上下文附加</span>
+            </div>
+          </Show>
           <Show when={pendingContextRefs().length > 0}>
             <div class="context-ref-chips">
               <For each={pendingContextRefs()}>
