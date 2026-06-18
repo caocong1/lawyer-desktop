@@ -770,7 +770,7 @@ git commit -m "feat: add shared contenteditable MentionComposer with atomic chip
 - Consumes: `MentionComposer`, `MentionComposerApi` from `../MentionComposer`.
 - Produces: no new exports.
 
-- [ ] **Step 1: Rewrite the composer wiring in `HomePage.tsx`**
+- [x] **Step 1: Rewrite the composer wiring in `HomePage.tsx`**
 
 Remove these now-unused pieces:
 - the import line `import { MentionMenu } from "../MentionMenu";`
@@ -850,7 +850,7 @@ const {
 } = useConversation();
 ```
 
-- [ ] **Step 2: Add HomePage sizing overrides to `HomePage.css`**
+- [x] **Step 2: Add HomePage sizing overrides to `HomePage.css`**
 
 Append:
 
@@ -863,12 +863,12 @@ Append:
 
 (Keep any existing `.starter-input` rules that set padding/typography; they still apply because the wrapper carries that class.)
 
-- [ ] **Step 3: Typecheck**
+- [x] **Step 3: Typecheck**
 
 Run: `npm run build`
 Expected: `tsc -b` passes with no errors (vite build also succeeds). If `tsc` flags an unused import/signal, remove it.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/components/home/HomePage.tsx src/components/home/HomePage.css

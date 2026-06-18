@@ -182,3 +182,8 @@
   left: 0;
   z-index: 20;
 }
+
+.starter-field .mc-editor {
+  min-height: 96px;
+  font-size: 15px;
+}

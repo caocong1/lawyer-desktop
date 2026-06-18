@@ -1,14 +1,14 @@
-import { For, onMount, onCleanup, createSignal, Show, createMemo } from "solid-js";
+import { For, onMount, onCleanup, createSignal, Show } from "solid-js";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Icon } from "../icons/Icons";
 import { classifyDroppedPaths } from "../../services/api";
-import { MentionMenu } from "../MentionMenu";
+import { MentionComposer } from "../MentionComposer";
+import type { MentionComposerApi } from "../MentionComposer";
 import "./HomePage.css";
 import { useConversation } from "../../stores/conversation";
 import type { ContextRefPayload } from "../../types/contextRefs";
 import { pathToRefAlias } from "../../utils/evidenceFlow";
-import { detectAtTrigger, filterMentionCandidates, buildMentionInsert } from "../../utils/mentions";
 import { DOC_TYPES } from "../../utils/docTypes";
 
 export interface HomePageProps {
@@ -47,24 +47,18 @@ export function HomePage(props: HomePageProps) {
     addContextRef,
     removeContextRef,
     addInlineMention,
+    removeInlineMention,
   } = useConversation();
   const [input, setInput] = createSignal("");
   const [attachOpen, setAttachOpen] = createSignal(false);
   const [dragActive, setDragActive] = createSignal(false);
-  const [mentionOpen, setMentionOpen] = createSignal(false);
-  const [mentionQuery, setMentionQuery] = createSignal("");
-  const [mentionIndex, setMentionIndex] = createSignal(0);
+  let composer: MentionComposerApi | undefined;
   let attachRef: HTMLDivElement | undefined;
-  let inputRef: HTMLTextAreaElement | undefined;
-  let mentionMenuRef: HTMLDivElement | undefined;
 
   onMount(() => {
     const onDocClick = (e: MouseEvent) => {
       if (attachOpen() && attachRef && !attachRef.contains(e.target as Node)) {
         setAttachOpen(false);
-      }
-      if (mentionOpen() && mentionMenuRef && !mentionMenuRef.contains(e.target as Node)) {
-        setMentionOpen(false);
       }
     };
     document.addEventListener("click", onDocClick);
@@ -149,38 +143,12 @@ export function HomePage(props: HomePageProps) {
   }
 
   function insertExamplePrompt(prompt: string) {
-    const next = input().trim()
-      ? `${input().trimEnd()}\n\n${prompt}`
-      : prompt;
-    setInput(next);
-    queueMicrotask(() => {
-      inputRef?.focus();
-      inputRef?.setSelectionRange(next.length, next.length);
-    });
+    const next = input().trim() ? `${input().trimEnd()}\n\n${prompt}` : prompt;
+    composer?.clear();
+    composer?.insertText(next);
   }
 
   const canSend = () => input().trim().length > 0 || pendingContextRefs().length > 0;
-
-  const mentionCandidates = createMemo(() =>
-    filterMentionCandidates(pendingContextRefs(), mentionQuery()),
-  );
-
-  function insertMention(ref: ContextRefPayload) {
-    const ta = inputRef;
-    if (!ta) return;
-    const text = input();
-    const trigger = detectAtTrigger(text, ta.selectionStart ?? text.length);
-    if (!trigger.active) return;
-    const { newText, cursorAfter } = buildMentionInsert(ref, trigger.atPos, ta.selectionStart ?? text.length, text);
-    setInput(newText);
-    addContextRef(ref);
-    addInlineMention(ref.path);
-    setMentionOpen(false);
-    queueMicrotask(() => {
-      ta.focus();
-      ta.setSelectionRange(cursorAfter, cursorAfter);
-    });
-  }
 
   return (
     <div class="home scroll">
@@ -239,69 +207,21 @@ export function HomePage(props: HomePageProps) {
             </div>
           </Show>
           <div class="starter-field">
-            <textarea
-              ref={inputRef}
+            <MentionComposer
               class="starter-input"
               placeholder="描述你的法律需求，例如：起草一份股权转让协议，或附加本地资料后生成诉讼方案…"
-              value={input()}
-              onInput={(e) => {
-                const val = e.currentTarget.value;
-                setInput(val);
-                const ta = e.currentTarget;
-                const trigger = detectAtTrigger(val, ta.selectionStart ?? val.length);
-                if (trigger.active) {
-                  setMentionOpen(true);
-                  setMentionQuery(trigger.query);
-                  setMentionIndex(0);
-                } else {
-                  setMentionOpen(false);
-                }
+              candidates={pendingContextRefs()}
+              onReady={(api) => (composer = api)}
+              onInput={(text) => setInput(text)}
+              onInsertMention={(ref) => {
+                addContextRef(ref);
+                addInlineMention(ref.path);
               }}
-              onKeyDown={(e) => {
-                if (e.isComposing) return;
-                if (mentionOpen()) {
-                  const cands = mentionCandidates();
-                  if (e.key === "Escape") {
-                    e.preventDefault();
-                    setMentionOpen(false);
-                    return;
-                  }
-                  if (cands.length > 0) {
-                    if (e.key === "ArrowDown") {
-                      e.preventDefault();
-                      setMentionIndex((i) => (i + 1) % cands.length);
-                      return;
-                    }
-                    if (e.key === "ArrowUp") {
-                      e.preventDefault();
-                      setMentionIndex((i) => (i - 1 + cands.length) % cands.length);
-                      return;
-                    }
-                    if (e.key === "Enter" || e.key === "Tab") {
-                      e.preventDefault();
-                      const ref = cands[mentionIndex()];
-                      if (ref) insertMention(ref);
-                      return;
-                    }
-                  }
-                }
-                if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-                  e.preventDefault();
-                  if (canSend()) props.onStart(input().trim());
-                }
+              onRemoveMention={(path) => removeInlineMention(path)}
+              onSend={() => {
+                if (canSend()) props.onStart(input().trim());
               }}
-              rows={3}
             />
-            <Show when={mentionOpen() && pendingContextRefs().length > 0}>
-              <div class="mention-wrap" ref={mentionMenuRef}>
-                <MentionMenu
-                  candidates={mentionCandidates()}
-                  selectedIndex={mentionIndex()}
-                  onSelect={insertMention}
-                  onDismiss={() => setMentionOpen(false)}
-                />
-              </div>
-            </Show>
           </div>
           <div class="starter-bar">
             <div class="attach-wrap" ref={attachRef}>
@@ -330,6 +250,14 @@ export function HomePage(props: HomePageProps) {
                 </div>
               </Show>
             </div>
+            <button
+              type="button"
+              class="tool tool-btn mc-at-btn"
+              title="插入文件引用"
+              onClick={() => composer?.promptMention()}
+            >
+              @
+            </button>
             <span class="grow" />
             <span class="send-hint">
               <kbd>Ctrl</kbd>+<kbd>Enter</kbd> 发送
