@@ -453,7 +453,7 @@ export function ChatPanel(props: ChatPanelProps) {
   }
 
   return (
-    <div class="chat" style={{ "--chat-w": "500px" }}>
+    <div class="chat">
       <div class="chat-ctx">
         <div class="dic">
           <Icon name="doc" />
