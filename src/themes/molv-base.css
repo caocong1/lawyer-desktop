@@ -219,6 +219,13 @@ button { font-family: inherit; }
 
 /* ===================== 右：文书预览 ===================== */
 .doc { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--doc-canvas); position: relative; }
+.ws-splitter { flex: 0 0 6px; margin: 0 -3px; position: relative; z-index: 5; cursor: col-resize; background: transparent; touch-action: none; }
+.ws-splitter::after { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; transform: translateX(-50%); background: transparent; transition: background .15s; }
+.ws-splitter:hover::after, .ws.ws-resizing .ws-splitter::after { background: var(--accent); }
+.ws.ws-resizing { cursor: col-resize; }
+.ws.ws-resizing * { user-select: none; }
+.ws.solo .chat { flex: 1 1 auto; border-right: none; }
+.ws.solo .thread > *, .ws.solo .composer > * { max-width: var(--solo-col, 760px); margin-inline: auto; }
 .doc-tb { flex: 0 0 auto; height: 54px; display: flex; align-items: center; gap: 12px; padding: 0 24px; border-bottom: 1px solid var(--line); background: var(--app-bg); }
 .doc-title { font-family: var(--serif); font-weight: 600; font-size: 14.5px; color: var(--ink); }
 .ver-pill { font-size: 11px; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 6px; padding: 2px 8px; font-family: var(--mono); white-space: nowrap; }
