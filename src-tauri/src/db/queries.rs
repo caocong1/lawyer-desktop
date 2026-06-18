@@ -500,6 +500,12 @@ pub async fn ensure_skill_opt_schema(pool: &Pool<Sqlite>) -> anyhow::Result<()> 
         .execute(pool)
         .await
         .context("failed to apply skill_opt schema")?;
+
+    let dedup_sql = include_str!("../../migrations/006_feedback_dedup.sql");
+    sqlx::raw_sql(dedup_sql)
+        .execute(pool)
+        .await
+        .context("failed to apply feedback dedup schema")?;
     Ok(())
 }
 
@@ -689,7 +695,15 @@ pub async fn insert_skill_feedback(
     let now = Utc::now().to_rfc3339();
     sqlx::query(
         "INSERT INTO skill_feedback (id, message_id, conversation_id, skill_name, plugin_name, rating, comment, dimensions_json, created_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         ON CONFLICT(message_id) DO UPDATE SET \
+            conversation_id = excluded.conversation_id, \
+            skill_name = excluded.skill_name, \
+            plugin_name = excluded.plugin_name, \
+            rating = excluded.rating, \
+            comment = excluded.comment, \
+            dimensions_json = excluded.dimensions_json, \
+            created_at = excluded.created_at",
     )
     .bind(&id)
     .bind(message_id)
@@ -702,18 +716,17 @@ pub async fn insert_skill_feedback(
     .bind(&now)
     .execute(pool)
     .await
-    .context("insert skill_feedback")?;
-    Ok(SkillFeedbackRow {
-        id,
-        message_id: message_id.to_string(),
-        conversation_id: conversation_id.to_string(),
-        skill_name: skill_name.map(|s| s.to_string()),
-        plugin_name: plugin_name.map(|s| s.to_string()),
-        rating: rating.to_string(),
-        comment: comment.map(|s| s.to_string()),
-        dimensions_json: dimensions_json.map(|s| s.to_string()),
-        created_at: now,
-    })
+    .context("upsert skill_feedback")?;
+
+    let row = sqlx::query(
+        "SELECT id, message_id, conversation_id, skill_name, plugin_name, rating, comment, dimensions_json, created_at \
+         FROM skill_feedback WHERE message_id = ?",
+    )
+    .bind(message_id)
+    .fetch_one(pool)
+    .await
+    .context("fetch upserted skill_feedback")?;
+    row_to_skill_feedback(&row)
 }
 
 pub async fn list_skill_feedback_by_conversation(
@@ -1161,4 +1174,60 @@ fn row_to_provider(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<LlmProvider>
         config_json: row.get("config_json"),
         created_at: row.get("created_at"),
     })
+}
+
+#[cfg(test)]
+mod feedback_tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn test_pool() -> Pool<Sqlite> {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::raw_sql(include_str!("../../migrations/004_skill_opt.sql"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::raw_sql(include_str!("../../migrations/006_feedback_dedup.sql"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn upsert_keeps_single_row_and_stable_id() {
+        let pool = test_pool().await;
+        let first =
+            insert_skill_feedback(&pool, "m1", "c1", Some("s"), None, "up", None, None)
+                .await
+                .unwrap();
+        let second = insert_skill_feedback(
+            &pool,
+            "m1",
+            "c1",
+            Some("s"),
+            None,
+            "down",
+            Some("needs work"),
+            Some("[\"法条\"]"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(first.id, second.id, "feedback id stays stable across edits");
+        assert_eq!(second.rating, "down");
+        assert_eq!(second.comment.as_deref(), Some("needs work"));
+
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM skill_feedback WHERE message_id = ?")
+                .bind("m1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count.0, 1, "only one row per message_id");
+    }
 }
