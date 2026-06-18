@@ -13,9 +13,9 @@ import {
 } from "./app-release.ts";
 import {
   appendFeedback,
+  dedupeWithTriage,
   loadAllFeedback,
   loadTriage,
-  mergeTriage,
   saveTriage,
   type FeedbackRecord,
   type TargetRepo,
@@ -136,7 +136,7 @@ async function readAppManifest(): Promise<AppReleaseManifest | null> {
 async function loadMergedFeedback() {
   const records = await loadAllFeedback(FEEDBACK_LOG);
   const triage = await loadTriage(TRIAGE_PATH);
-  return mergeTriage(records, triage);
+  return dedupeWithTriage(records, triage);
 }
 
 const server = Bun.serve({
