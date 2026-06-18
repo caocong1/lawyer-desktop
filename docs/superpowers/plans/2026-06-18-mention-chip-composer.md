@@ -886,7 +886,7 @@ git commit -m "feat(home): use MentionComposer with atomic mention chips and @ b
 **Interfaces:**
 - Consumes: `MentionComposer`, `MentionComposerApi` from `../MentionComposer`.
 
-- [ ] **Step 1: Rewrite the composer wiring in `ChatPanel.tsx`**
+- [x] **Step 1: Rewrite the composer wiring in `ChatPanel.tsx`**
 
 Remove now-unused pieces:
 - the import `import { MentionMenu } from "../MentionMenu";`
@@ -965,7 +965,7 @@ In the `input-row`, add the `@` button right after the `attach-wrap` div:
 </button>
 ```
 
-- [ ] **Step 2: Add ChatPanel sizing overrides to `ChatPanel.css`**
+- [x] **Step 2: Add ChatPanel sizing overrides to `ChatPanel.css`**
 
 Append:
 
@@ -976,12 +976,12 @@ Append:
 }
 ```
 
-- [ ] **Step 3: Typecheck**
+- [x] **Step 3: Typecheck**
 
 Run: `npm run build`
 Expected: `tsc -b` passes. Remove any import/signal `tsc` reports as unused (e.g. `createMemo` if no longer used, `buildMentionInsert`).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/components/workspace/ChatPanel.tsx src/components/workspace/ChatPanel.css

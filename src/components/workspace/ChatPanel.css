@@ -263,3 +263,8 @@
   left: 0;
   z-index: 20;
 }
+
+.textarea-wrap .mc-editor {
+  min-height: 24px;
+  max-height: 120px;
+}
