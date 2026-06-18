@@ -2,7 +2,12 @@ import type { ContextRefPayload } from "../types/contextRefs";
 
 const MENTION_END_RE = /[\s,，。;；:：!?！？)\]）】》>"'`]/u;
 
-export function detectAtTrigger(text: string, cursorPos: number) {
+export function detectAtTrigger(
+  text: string,
+  cursorPos: number,
+  opts: { requireBoundary?: boolean } = {},
+) {
+  const requireBoundary = opts.requireBoundary !== false;
   const pos = Math.min(cursorPos, text.length);
   let i = pos - 1;
 
@@ -13,7 +18,7 @@ export function detectAtTrigger(text: string, cursorPos: number) {
     }
     if (ch === "@") {
       const atPos = i;
-      if (atPos === 0 || /\s/.test(text[atPos - 1]!)) {
+      if (!requireBoundary || atPos === 0 || /\s/.test(text[atPos - 1]!)) {
         const query = text.slice(atPos + 1, pos);
         return { active: true, query, atPos };
       }
@@ -148,4 +153,36 @@ export function validateMentionPaths(
     if (!ref) return false;
     return isRefMentioned(text, ref);
   });
+}
+
+/** Walk a contenteditable root into the plain-text @alias string the send
+ *  pipeline (resolveInlineMentions) consumes. Chips contribute their full
+ *  data-alias, not their (CSS-truncated) visible label. */
+export function serializeEditor(root: Node): string {
+  let out = "";
+  for (const node of Array.from(root.childNodes)) {
+    out += serializeNode(node);
+  }
+  return out;
+}
+
+function serializeNode(node: Node): string {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return node.textContent ?? "";
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE) {
+    return "";
+  }
+  const el = node as HTMLElement;
+  if (el.tagName === "BR") {
+    return "\n";
+  }
+  if (el.classList.contains("mc-chip")) {
+    return `@${el.getAttribute("data-alias") ?? ""}`;
+  }
+  let inner = "";
+  for (const child of Array.from(el.childNodes)) {
+    inner += serializeNode(child);
+  }
+  return inner;
 }

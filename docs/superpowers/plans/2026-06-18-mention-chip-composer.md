@@ -32,7 +32,7 @@
   - `detectAtTrigger(text: string, cursorPos: number, opts?: { requireBoundary?: boolean }): { active: boolean; query: string; atPos: number }` — when `opts.requireBoundary === false`, `@` triggers regardless of the preceding character. Default (omitted/`true`) is the current behavior.
   - `serializeEditor(root: Node): string` — walks `root.childNodes` in document order: text nodes → their `textContent`; `.mc-chip` elements → `@` + `data-alias`; `<br>` → `"\n"`; any other element → recurse into its children. Returns the plain-text string the send pipeline expects.
 
-- [ ] **Step 1: Write the failing tests** — append to `src/utils/__tests__/mentions.test.ts`:
+- [x] **Step 1: Write the failing tests** — append to `src/utils/__tests__/mentions.test.ts`:
 
 ```ts
 import { detectAtTrigger, serializeEditor } from "../mentions";
@@ -101,12 +101,12 @@ describe("serializeEditor", () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `npx vitest run src/utils/__tests__/mentions.test.ts`
 Expected: FAIL — `serializeEditor is not a function` and the `requireBoundary` cases fail.
 
-- [ ] **Step 3: Implement the changes in `src/utils/mentions.ts`**
+- [x] **Step 3: Implement the changes in `src/utils/mentions.ts`**
 
 Replace the existing `detectAtTrigger` with this version (only the `@` branch and the new param change):
 
@@ -176,12 +176,12 @@ function serializeNode(node: Node): string {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run src/utils/__tests__/mentions.test.ts`
 Expected: PASS (all new tests + the 5 existing resolution tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/utils/mentions.ts src/utils/__tests__/mentions.test.ts
