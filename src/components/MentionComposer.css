@@ -1,0 +1,64 @@
+.mc-composer {
+  position: relative;
+  width: 100%;
+}
+
+.mc-editor {
+  width: 100%;
+  min-height: 64px;
+  max-height: 220px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  outline: none;
+  border: none;
+  background: transparent;
+  font: inherit;
+  color: var(--ink);
+  line-height: 1.6;
+}
+
+.mc-editor.is-empty::before {
+  content: attr(data-placeholder);
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.mc-editor[contenteditable="false"] {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.mc-chip {
+  display: inline-flex;
+  align-items: baseline;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: baseline;
+  margin: 0 1px;
+  padding: 0 6px;
+  border-radius: 5px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 0.9em;
+  line-height: 1.4;
+  cursor: default;
+  user-select: all;
+}
+
+.mc-at-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+}
+
+.mc-menu-wrap {
+  position: absolute;
+  left: 0;
+  top: 100%;
+  z-index: 30;
+}

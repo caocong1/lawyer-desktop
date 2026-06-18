@@ -225,7 +225,7 @@ export interface MentionComposerProps {
 }
 ```
 
-- [ ] **Step 1: Write the failing component test** — create `src/components/__tests__/MentionComposer.test.tsx`:
+- [x] **Step 1: Write the failing component test** — create `src/components/__tests__/MentionComposer.test.tsx`:
 
 ```tsx
 import { render, cleanup } from "@solidjs/testing-library";
@@ -326,12 +326,12 @@ describe("MentionComposer", () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run src/components/__tests__/MentionComposer.test.tsx`
 Expected: FAIL — cannot resolve `../MentionComposer`.
 
-- [ ] **Step 3: Create `src/components/MentionComposer.css`**
+- [x] **Step 3: Create `src/components/MentionComposer.css`**
 
 ```css
 .mc-composer {
@@ -400,7 +400,7 @@ Expected: FAIL — cannot resolve `../MentionComposer`.
 }
 ```
 
-- [ ] **Step 4: Create `src/components/MentionComposer.tsx`** with the full implementation:
+- [x] **Step 4: Create `src/components/MentionComposer.tsx`** with the full implementation:
 
 ```tsx
 import { createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
@@ -744,14 +744,14 @@ export function MentionComposer(props: MentionComposerProps) {
 }
 ```
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 Run: `npx vitest run src/components/__tests__/MentionComposer.test.tsx`
 Expected: PASS — all five cases.
 
 > Note: jsdom's `Selection`/`Range` support is partial, so live-typing trigger flow is covered by manual UAT (Task 5), not these tests. The tests drive the deterministic imperative API (`insertText`/`insertMention`/`clear`) and the DOM-diff chip removal.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/components/MentionComposer.tsx src/components/MentionComposer.css src/components/__tests__/MentionComposer.test.tsx
