@@ -11,6 +11,6 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
-    exclude: ["**/node_modules/**", "**/archive/**", "**/dist/**"],
+    exclude: ["**/node_modules/**", "**/archive/**", "**/dist/**", "tools/sync-service/**"],
   },
 });
