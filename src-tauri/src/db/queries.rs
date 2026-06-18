@@ -527,6 +527,24 @@ pub async fn ensure_sync_schema(pool: &Pool<Sqlite>) -> anyhow::Result<()> {
         .execute(pool)
         .await
         .context("failed to apply sync schema")?;
+
+    let has_fb_col: Option<(i64,)> = sqlx::query_as(
+        "SELECT COUNT(*) FROM pragma_table_info('feedback_outbox') WHERE name = 'feedback_id'",
+    )
+    .fetch_optional(pool)
+    .await?;
+    if has_fb_col.map(|(c,)| c).unwrap_or(0) == 0 {
+        sqlx::query("ALTER TABLE feedback_outbox ADD COLUMN feedback_id TEXT")
+            .execute(pool)
+            .await
+            .context("failed to add feedback_outbox.feedback_id")?;
+    }
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_feedback_outbox_feedback_id ON feedback_outbox(feedback_id)",
+    )
+    .execute(pool)
+    .await
+    .context("failed to index feedback_outbox.feedback_id")?;
     Ok(())
 }
 

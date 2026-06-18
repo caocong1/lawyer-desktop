@@ -144,7 +144,7 @@ pub async fn submit_message_feedback(
         "created_at": row.created_at,
     });
 
-    crate::sync::outbox::enqueue_feedback(&db, &payload.to_string())
+    crate::sync::outbox::enqueue_feedback(&db, &row.id, &payload.to_string())
         .await
         .map_err(|e| e.to_string())?;
 
