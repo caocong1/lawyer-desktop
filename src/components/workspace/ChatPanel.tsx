@@ -315,7 +315,7 @@ export function ChatPanel(props: ChatPanelProps) {
         return;
       }
     }
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       send();
     }
@@ -724,6 +724,9 @@ export function ChatPanel(props: ChatPanelProps) {
               <Icon name="book" />
             </span>
             <span class="grow" />
+            <span class="send-hint">
+              <kbd>Ctrl</kbd>+<kbd>Enter</kbd> 发送
+            </span>
             <button
               type="button"
               class="send-btn"

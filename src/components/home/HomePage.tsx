@@ -259,24 +259,35 @@ export function HomePage(props: HomePageProps) {
               }}
               onKeyDown={(e) => {
                 if (e.isComposing) return;
-                if (!mentionOpen()) return;
-                const cands = mentionCandidates();
-                if (e.key === "Escape") {
-                  e.preventDefault();
-                  setMentionOpen(false);
-                  return;
+                if (mentionOpen()) {
+                  const cands = mentionCandidates();
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    setMentionOpen(false);
+                    return;
+                  }
+                  if (cands.length > 0) {
+                    if (e.key === "ArrowDown") {
+                      e.preventDefault();
+                      setMentionIndex((i) => (i + 1) % cands.length);
+                      return;
+                    }
+                    if (e.key === "ArrowUp") {
+                      e.preventDefault();
+                      setMentionIndex((i) => (i - 1 + cands.length) % cands.length);
+                      return;
+                    }
+                    if (e.key === "Enter" || e.key === "Tab") {
+                      e.preventDefault();
+                      const ref = cands[mentionIndex()];
+                      if (ref) insertMention(ref);
+                      return;
+                    }
+                  }
                 }
-                if (cands.length === 0) return;
-                if (e.key === "ArrowDown") {
+                if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
                   e.preventDefault();
-                  setMentionIndex((i) => (i + 1) % cands.length);
-                } else if (e.key === "ArrowUp") {
-                  e.preventDefault();
-                  setMentionIndex((i) => (i - 1 + cands.length) % cands.length);
-                } else if (e.key === "Enter" || e.key === "Tab") {
-                  e.preventDefault();
-                  const ref = cands[mentionIndex()];
-                  if (ref) insertMention(ref);
+                  if (canSend()) props.onStart(input().trim());
                 }
               }}
               rows={3}
@@ -320,13 +331,16 @@ export function HomePage(props: HomePageProps) {
               </Show>
             </div>
             <span class="grow" />
+            <span class="send-hint">
+              <kbd>Ctrl</kbd>+<kbd>Enter</kbd> 发送
+            </span>
             <button
               type="button"
               class="btn-accent"
               onClick={() => props.onStart(input().trim())}
               disabled={!canSend()}
             >
-              开始
+              发送
               <Icon name="send" />
             </button>
           </div>
