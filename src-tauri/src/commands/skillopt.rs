@@ -142,8 +142,12 @@ pub async fn submit_message_feedback(
         "device_id": sync_settings.device_id,
         "skills_version": skills_version,
         "created_at": row.created_at,
+        "updated_at": row.created_at,
     });
 
+    crate::sync::outbox::supersede_pending_feedback(&db, &row.id)
+        .await
+        .map_err(|e| e.to_string())?;
     crate::sync::outbox::enqueue_feedback(&db, &row.id, &payload.to_string())
         .await
         .map_err(|e| e.to_string())?;
