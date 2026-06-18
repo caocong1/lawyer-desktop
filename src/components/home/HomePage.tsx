@@ -1,6 +1,8 @@
 import { For, onMount, onCleanup, createSignal, Show, createMemo } from "solid-js";
 import { open } from "@tauri-apps/plugin-dialog";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Icon } from "../icons/Icons";
+import { classifyDroppedPaths } from "../../services/api";
 import { MentionMenu } from "../MentionMenu";
 import "./HomePage.css";
 import { useConversation } from "../../stores/conversation";
@@ -48,6 +50,7 @@ export function HomePage(props: HomePageProps) {
   } = useConversation();
   const [input, setInput] = createSignal("");
   const [attachOpen, setAttachOpen] = createSignal(false);
+  const [dragActive, setDragActive] = createSignal(false);
   const [mentionOpen, setMentionOpen] = createSignal(false);
   const [mentionQuery, setMentionQuery] = createSignal("");
   const [mentionIndex, setMentionIndex] = createSignal(0);
@@ -65,8 +68,58 @@ export function HomePage(props: HomePageProps) {
       }
     };
     document.addEventListener("click", onDocClick);
-    onCleanup(() => document.removeEventListener("click", onDocClick));
+
+    // OS file/folder drag-and-drop onto the landing composer. The native event
+    // is webview-wide, so a drop anywhere on the home screen attaches here.
+    // Requires dragDropEnabled=true in tauri.conf.json (set at window creation).
+    let disposed = false;
+    let unlistenDrop: (() => void) | undefined;
+    void getCurrentWebview()
+      .onDragDropEvent((event) => {
+        const payload = event.payload;
+        if (payload.type === "enter" || payload.type === "over") {
+          setDragActive(true);
+        } else if (payload.type === "drop") {
+          setDragActive(false);
+          void handleDroppedPaths(payload.paths);
+        } else {
+          // "leave"
+          setDragActive(false);
+        }
+      })
+      .then((u) => {
+        if (disposed) u();
+        else unlistenDrop = u;
+      })
+      .catch((e) => console.error("注册拖放监听失败:", e));
+
+    onCleanup(() => {
+      disposed = true;
+      document.removeEventListener("click", onDocClick);
+      unlistenDrop?.();
+    });
   });
+
+  // Attach OS-dropped paths the same way the picker does: classify each path
+  // (file vs. directory) on the backend, then route through the shared
+  // addContextRef so the chips/mentions behave identically to manual attach.
+  async function handleDroppedPaths(paths: string[]) {
+    const cleaned = paths.filter((p) => typeof p === "string" && p.trim().length > 0);
+    if (cleaned.length === 0) return;
+    try {
+      const kinds = await classifyDroppedPaths(cleaned);
+      let added = 0;
+      for (const item of kinds) {
+        if (!item.exists) continue;
+        addContextRef(toRef(item.path, item.is_dir ? "directory" : "file"));
+        added += 1;
+      }
+      if (added > 0) props.onToast?.(`已附加 ${added} 项资料`);
+    } catch (e) {
+      console.error("处理拖放文件失败:", e);
+      props.onToast?.("处理拖放文件失败");
+    }
+  }
 
   async function pickDirectory() {
     setAttachOpen(false);
@@ -148,7 +201,13 @@ export function HomePage(props: HomePageProps) {
           描述你的需求，墨律将为你起草、检索法条判例并标注条款风险。也可以从下方示例快速填入。
         </p>
 
-        <div class="starter">
+        <div class="starter" classList={{ "drag-active": dragActive() }}>
+          <Show when={dragActive()}>
+            <div class="drop-overlay">
+              <Icon name="attach" />
+              <span>拖放文件或文件夹，作为上下文附加</span>
+            </div>
+          </Show>
           <div class="starter-top">
             <div class="seal">墨</div>
             <div class="t">新建任务</div>
