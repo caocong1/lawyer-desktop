@@ -36,13 +36,30 @@ pub fn build_skill_descriptions(skills: &[SkillMetadata]) -> String {
 pub fn is_retrieval_tool_name(name: &str) -> bool {
     matches!(
         name,
-        "legal_search" | "search_law" | "get_law_article" | "search_workspace"
+        "legal_search" | "search_law" | "get_law_article" | "fetch_url" | "search_workspace"
     ) || (name.starts_with("mcp__") && {
         let lower = name.to_lowercase();
-        ["law", "legal", "fagui", "statute", "wenshu", "case", "judgment"]
-            .iter()
-            .any(|frag| lower.contains(frag))
+        [
+            "law", "legal", "fagui", "statute", "wenshu", "case", "judgment",
+        ]
+        .iter()
+        .any(|frag| lower.contains(frag))
+            || is_public_web_tool_text(&lower)
     })
+}
+
+fn is_public_web_tool_text(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    [
+        "web", "search", "fetch", "url", "browser", "crawl", "网页", "搜索", "抓取", "链接",
+    ]
+    .iter()
+    .any(|frag| lower.contains(frag))
+}
+
+pub fn is_retrieval_tool(name: &str, description: &str) -> bool {
+    is_retrieval_tool_name(name)
+        || (name.starts_with("mcp__") && is_public_web_tool_text(description))
 }
 
 /// (tool name, mapped research step) — only lines whose tool is actually
@@ -51,6 +68,10 @@ const RETRIEVAL_TOOL_MAP: &[(&str, &str)] = &[
     (
         "legal_search",
         "聚合检索法律依据（一次并发查本地法规库与在线官方源，检索首选）",
+    ),
+    (
+        "fetch_url",
+        "读取用户本轮明确提供的网页链接（公众号、公告、公开资料等）",
     ),
     ("search_law", "本地法规库全文检索（定位法条，离线可用）"),
     (
@@ -100,7 +121,12 @@ pub fn build_retrieval_tool_mapping(retrieval_tools: &[String]) -> String {
     }
     for name in retrieval_tools {
         if !RETRIEVAL_TOOL_MAP.iter().any(|(n, _)| n == name) {
-            s.push_str(&format!("- `{}`：外部法律数据源检索\n", name));
+            let desc = if is_public_web_tool_text(name) {
+                "公开网页资料检索/抓取"
+            } else {
+                "外部法律数据源检索"
+            };
+            s.push_str(&format!("- `{}`：{}\n", name, desc));
         }
     }
     s.push_str(
@@ -168,19 +194,21 @@ pub fn build_system_prompt(
 
 fn build_qa_system_prompt() -> String {
     String::from(
-        "你是一位专业的中国法律 AI 助手，面向中国大陆执业律师，进行**法律问答 / 咨询解惑**。\n\n\
+        "你是一位专业的中国法律 AI 助手，面向中国大陆执业律师，进行**自由法律问答 / 法律研究 / 风险分析**。\n\n\
         重要声明：你的所有输出均为供律师参考的法律研究意见，非法律建议、非法律结论，不能替代执业律师。\n\n\
-        ## 模式：法律问答（Q&A）\n\
-        1. 目标是回答用户的具体法律问题（法条含义、可行性、风险、流程、构成要件等），**不产出成稿文书，也不基于本地案卷写诉讼方案**。\n\
-        2. 先检索后作答：凡涉及具体法条、司法解释或案例的引用，必须先用检索工具核验再写入回答；未经检索核验的引用一律标注 [待律师复核]。\n\
-        3. 纯定义性、流程性或常识性问题可直接简明作答，无需强行检索。\n\
-        4. 信息不足时，可在回答中分情形讨论，或用一句话提示需要补充的关键事实；**不强制调用 ask_user**，不要因缺少信息就停下不答。\n\
-        5. 工具必须通过 API 工具接口调用，不得在正文里伪造工具调用或编造检索结果。\n\n\
+        ## 模式：法律问答（默认底座）\n\
+        1. 目标是自由回答用户的问题：法条含义、法规适用、合规/监管风险、流程、构成要件、谈判策略、争议预判、材料解读、书面分析性答复等，都可以直接在本模式完成。\n\
+        2. **不生成具体正式文书/文档产物**，不要输出 JSON 文书结构，也不要把回答写入右侧文书预览；只有用户明确要求起草具体文书时才提示其改为起草需求。\n\
+        3. 先检索后作答：凡涉及具体法条、司法解释、案例、监管文件、公告通知或用户提供网页链接，应优先使用可用检索/读取工具核验；未经核验的引用一律标注 [待律师复核]。\n\
+        4. 用户给出 URL 时，可用 `fetch_url` 读取本轮明确提供的链接；若有 web/search/fetch 类 MCP 工具，可用于公开网页资料检索。无法读取时如实说明检索局限，继续基于可用资料回答。\n\
+        5. 纯定义性、流程性或常识性问题可直接简明作答，无需强行检索。\n\
+        6. 信息不足时，可在回答中分情形讨论，或用一句话提示需要补充的关键事实；**不强制调用 ask_user**，不要因缺少信息就停下不答。\n\
+        7. 工具必须通过 API 工具接口调用，不得在正文里伪造工具调用或编造检索结果。\n\n\
         ## 输出格式\n\
         1. 直接用 **Markdown** 作答（结论先行，再给依据与提示），**不要输出 JSON 文书结构**。\n\
-        2. 引用法条/案例时标注精确条文号或案号与来源层级。\n\
+        2. 引用法条/案例/监管资料/网页资料时标注精确条文号、案号、文件名或网页来源层级。\n\
         3. 如权威来源冲突，陈述冲突并给出更稳妥路线。\n\
-        4. 如用户其实需要一份成稿文书，提示其改为「起草」需求，不要在问答模式里直接产出正式文书。\n\n",
+        4. 可以输出较长的法律分析、风险清单、办理建议或书面意见式 Markdown，但不得包装成正式文书产物。\n\n",
     )
 }
 
@@ -351,6 +379,21 @@ pub fn build_builtin_tool_definitions(
                         }
                     },
                     "required": ["path"]
+                }),
+            },
+        },
+        ToolDefinition {
+            tool_type: "function".into(),
+            function: FunctionDefinition {
+                name: "fetch_url".into(),
+                description: "读取用户本轮消息中明确提供的 http/https 网页链接，返回标题、来源 URL、content-type 与可读正文摘录。不要用于读取用户未提供的 URL。".into(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "url": { "type": "string", "description": "用户本轮消息中出现过的 http/https URL" },
+                        "max_chars": { "type": "integer", "description": "返回正文最大字符数，默认 20000，最大 60000" }
+                    },
+                    "required": ["url"]
                 }),
             },
         },
@@ -529,9 +572,43 @@ mod tests {
                 .iter()
                 .any(|t| t.function.name == "generate_docx")
         };
-        assert!(!has_docx(AgentMode::Chat), "Q&A mode must not offer generate_docx");
+        assert!(
+            !has_docx(AgentMode::Chat),
+            "Q&A mode must not offer generate_docx"
+        );
         assert!(has_docx(AgentMode::Draft));
         assert!(has_docx(AgentMode::Evidence));
+    }
+
+    #[test]
+    fn chat_mode_keeps_fetch_url_but_excludes_docx() {
+        let tools = build_builtin_tool_definitions(AgentMode::Chat, false);
+        let names = tools
+            .iter()
+            .map(|t| t.function.name.as_str())
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"fetch_url"));
+        assert!(!names.contains(&"generate_docx"));
+    }
+
+    #[test]
+    fn public_web_tools_are_retrieval_tools() {
+        assert!(is_retrieval_tool(
+            "fetch_url",
+            "读取用户本轮明确提供的网页链接"
+        ));
+        assert!(is_retrieval_tool(
+            "mcp__browser__fetch",
+            "Fetch a public URL and return readable content"
+        ));
+        assert!(is_retrieval_tool(
+            "mcp__web-search__search",
+            "Search the public web for current information"
+        ));
+        assert!(!is_retrieval_tool(
+            "mcp__settings__update_config",
+            "Update local settings"
+        ));
     }
 
     #[test]
@@ -539,6 +616,7 @@ mod tests {
         assert!(is_retrieval_tool_name("legal_search"));
         assert!(is_retrieval_tool_name("search_law"));
         assert!(is_retrieval_tool_name("get_law_article"));
+        assert!(is_retrieval_tool_name("fetch_url"));
         assert!(is_retrieval_tool_name("search_workspace"));
         assert!(is_retrieval_tool_name("mcp__law-database__search_laws"));
         assert!(is_retrieval_tool_name("mcp__wenshu__get_case_detail"));

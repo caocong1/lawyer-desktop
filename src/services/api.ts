@@ -26,6 +26,11 @@ export interface SendMessageRequest {
    *  skips its own classification. */
   forced_mode?: AgentMode;
   forced_label?: string;
+  /** Producing-task context for backend fallback classification when no
+   *  forced_mode is supplied. */
+  current_mode?: AgentMode;
+  current_task_label?: string;
+  has_active_document?: boolean;
 }
 
 export interface StreamChunk {

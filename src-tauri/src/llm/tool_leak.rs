@@ -9,6 +9,7 @@ const KNOWN_TOOLS: &[&str] = &[
     "list_files",
     "get_index_status",
     "read_user_file",
+    "fetch_url",
     "generate_docx",
     "select_skill",
     "ask_user",
@@ -27,10 +28,18 @@ pub fn contains_tool_leakage(text: &str) -> bool {
     lower.contains("dsml")
         || lower.contains("tool_calls")
         || lower.contains("tool_call")
+        || lower.contains("tool_c")
+        || lower.contains("</_calls")
+        || lower.contains("_calls>")
+        || lower.contains("< name=")
+        || lower.contains("<name=")
         || lower.contains("<invoke")
+        || lower.contains("invoke>")
         || lower.contains("</invoke")
         || lower.contains("invoke name=")
+        || lower.contains("invoke=")
         || lower.contains("parameter name=")
+        || lower.contains("parameter name ")
         || lower.contains("function_call")
         || lower.contains("<|")
         || lower.contains("|>")
@@ -71,9 +80,16 @@ pub fn sanitize_assistant_content(text: &str) -> String {
         if lower.contains("dsml")
             || lower.contains("tool_calls")
             || lower.contains("tool_call")
+            || lower.contains("tool_c")
+            || lower.contains("</_calls")
+            || lower.contains("_calls>")
+            || lower.contains("< name=")
+            || lower.contains("<name=")
             || lower.contains("invoke name=")
             || lower.contains("invoke=")
             || lower.contains("parameter name=")
+            || lower.contains("parameter name ")
+            || lower.contains("invoke>")
             || lower.contains("</invoke")
             || lower.contains("function_call")
             || lower.contains("toolalls")
@@ -87,8 +103,10 @@ pub fn sanitize_assistant_content(text: &str) -> String {
             let inner = trimmed[1..trimmed.len() - 1].trim().to_lowercase();
             let inner_stripped = inner.strip_prefix('/').unwrap_or(&inner);
             if inner_stripped.starts_with("tool_call")
+                || inner_stripped.starts_with("_call")
                 || inner_stripped.starts_with("invoke")
                 || inner_stripped.starts_with("parameter")
+                || inner_stripped.starts_with("name=")
                 || inner_stripped.starts_with("function_call")
                 || inner_stripped.starts_with("dsml")
             {
@@ -116,6 +134,9 @@ fn normalize_tool_name(raw: &str) -> String {
         .trim_matches('"')
         .trim_matches('\'')
         .to_lowercase();
+    if n.is_empty() {
+        return raw.trim().to_string();
+    }
     if KNOWN_TOOLS.iter().any(|t| *t == n) {
         return n;
     }
@@ -166,26 +187,29 @@ fn parse_parameter_value(block: &str, param_name: &str) -> Option<String> {
     None
 }
 
-/// Extract the tool name from an invoke block. Handles `invoke name="x"`,
-/// and the mangled `invoke="x"` variant seen in DSML leakage. When both
-/// forms appear, the earlier match wins (the tool name precedes parameters).
-fn extract_invoke_name(block: &str) -> Option<String> {
-    let name_idx = find_case_insensitive(block, "name=");
-    // `invoke=` value starts 7 chars in; encode as name_idx-compatible offset (+2).
-    let invoke_idx = find_case_insensitive(block, "invoke=").map(|i| i + 2);
-    let idx = match (name_idx, invoke_idx) {
-        (Some(n), Some(i)) => n.min(i),
-        (Some(n), None) => n,
-        (None, Some(i)) => i,
-        (None, None) => return None,
-    };
-    let rest = block[idx + 5..].trim_start();
+fn extract_quoted_attr(block: &str, attr: &str) -> Option<String> {
+    let idx = find_case_insensitive(block, attr)?;
+    let rest = block[idx + attr.len()..].trim_start();
     let quote = rest.chars().next()?;
     if quote != '"' && quote != '\'' {
         return None;
     }
     let name_end = rest[1..].find(quote)?;
     Some(rest[1..1 + name_end].to_string())
+}
+
+/// Extract the tool name from the invoke header only. Handles
+/// `invoke name="x"` and the mangled `invoke="x"` variant seen in DSML
+/// leakage, while avoiding `<parameter name="...">` fields inside the block.
+fn extract_invoke_name(block: &str) -> Option<String> {
+    let invoke_idx = find_case_insensitive(block, "invoke")?;
+    let rest = &block[invoke_idx..];
+    let header_end = rest
+        .find('>')
+        .or_else(|| rest.find('\n'))
+        .unwrap_or(rest.len());
+    let header = &rest[..header_end];
+    extract_quoted_attr(header, "name=").or_else(|| extract_quoted_attr(header, "invoke="))
 }
 
 fn parse_invoke_block(block: &str) -> Option<(String, Value)> {
@@ -201,6 +225,7 @@ fn parse_invoke_block(block: &str) -> Option<(String, Value)> {
         "max_chars",
         "pattern",
         "path",
+        "url",
         "skill_name",
         "reason",
     ] {
@@ -320,6 +345,29 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].function.name, "search_workspace");
         assert!(calls[0].function.arguments.contains("逾期利息"));
+    }
+
+    #[test]
+    fn does_not_treat_parameter_name_as_invoke_name() {
+        let text = r#"<invoke>
+<parameter name="search_workspace">最高人民法院审理建设工程施工纠纷适用法律问题的解释</parameter>
+</invoke>"#;
+        let calls = parse_embedded_tool_calls(text);
+        assert!(calls.is_empty(), "calls: {:?}", calls);
+    }
+
+    #[test]
+    fn detects_and_strips_bare_parameter_tool_fragment() {
+        let text = r#"parameter name lawName string="true">最高人民法院审理建设工程施工纠纷适用法律问题的解释（） invoke>"#;
+        assert!(contains_tool_leakage(text));
+        assert_eq!(sanitize_assistant_content(text), "");
+    }
+
+    #[test]
+    fn detects_and_strips_shortened_tool_c_fragment() {
+        let text = r#"tool_c>< name="law_name"="true">中华人民共和国民 </_calls>"#;
+        assert!(contains_tool_leakage(text));
+        assert_eq!(sanitize_assistant_content(text), "");
     }
 
     #[test]

@@ -1,7 +1,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 
+use regex::Regex;
+use reqwest::header::USER_AGENT;
+use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{Pool, Sqlite};
@@ -26,6 +30,10 @@ use crate::llm::tool_leak::{contains_tool_leakage, sanitize_assistant_content};
 use serde_json::json;
 
 pub const MAX_TOOL_ROUNDS: usize = 10;
+const FETCH_URL_TIMEOUT_SECS: u64 = 20;
+const FETCH_URL_DEFAULT_CHARS: usize = 20_000;
+const FETCH_URL_MAX_CHARS: usize = 60_000;
+const FETCH_URL_MAX_BYTES: u64 = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AskUserOption {
@@ -61,6 +69,192 @@ pub struct ToolContext<'a> {
     pub message_id: &'a str,
     /// root_hash values for workspace directories bound to this message.
     pub workspace_root_ids: &'a [String],
+    /// http/https URLs explicitly present in this user turn.
+    pub allowed_urls: &'a [String],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReadablePage {
+    title: Option<String>,
+    text: String,
+}
+
+fn http_url_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"https?://[^\s<>"'`，。；、]+"#).expect("http url regex"))
+}
+
+fn trim_url_punctuation(raw: &str) -> &str {
+    raw.trim_end_matches(|c: char| {
+        matches!(
+            c,
+            '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '）' | '】' | '》'
+        )
+    })
+}
+
+pub(crate) fn extract_http_urls(text: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    for m in http_url_re().find_iter(text) {
+        let candidate = trim_url_punctuation(m.as_str());
+        if let Some(normalized) = normalize_http_url(candidate) {
+            if !urls.iter().any(|u| u == &normalized) {
+                urls.push(normalized);
+            }
+        }
+    }
+    urls
+}
+
+fn normalize_http_url(raw: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(raw).ok()?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return None;
+    }
+    Some(parsed.to_string())
+}
+
+pub(crate) fn url_allowed_this_turn(url: &str, allowed_urls: &[String]) -> bool {
+    let Some(normalized) = normalize_http_url(url) else {
+        return false;
+    };
+    allowed_urls
+        .iter()
+        .filter_map(|u| normalize_http_url(u))
+        .any(|allowed| allowed == normalized)
+}
+
+fn compact_text_segments<'a>(segments: impl Iterator<Item = &'a str>) -> String {
+    let mut text = segments
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    for (from, to) in [
+        (" .", "."),
+        (" ,", ","),
+        (" ;", ";"),
+        (" :", ":"),
+        (" !", "!"),
+        (" ?", "?"),
+        (" ）", "）"),
+        (" 】", "】"),
+        (" 》", "》"),
+    ] {
+        text = text.replace(from, to);
+    }
+    text
+}
+
+fn strip_html_noise(html: &str) -> String {
+    let mut clean = html.to_string();
+    for tag in ["script", "style", "noscript", "svg"] {
+        let pattern = format!(r"(?is)<{tag}\b[^>]*>.*?</{tag}>");
+        if let Ok(re) = Regex::new(&pattern) {
+            clean = re.replace_all(&clean, " ").into_owned();
+        }
+    }
+    clean
+}
+
+pub(crate) fn html_to_readable_text(html: &str) -> ReadablePage {
+    let clean = strip_html_noise(html);
+    let document = Html::parse_document(&clean);
+    let title = Selector::parse("title")
+        .ok()
+        .and_then(|selector| document.select(&selector).next())
+        .map(|el| compact_text_segments(el.text()))
+        .filter(|s| !s.is_empty());
+
+    let text = ["main", "article", "body"]
+        .iter()
+        .filter_map(|selector| Selector::parse(selector).ok())
+        .filter_map(|selector| document.select(&selector).next())
+        .map(|el| compact_text_segments(el.text()))
+        .find(|s| !s.is_empty())
+        .unwrap_or_else(|| compact_text_segments(document.root_element().text()));
+
+    ReadablePage { title, text }
+}
+
+pub(crate) fn truncate_with_notice(text: &str, max_chars: usize, label: &str) -> String {
+    let total = text.chars().count();
+    if total <= max_chars {
+        return text.to_string();
+    }
+    let head = text.chars().take(max_chars).collect::<String>();
+    format!("{head}\n\n[{label}已截断，共 {total} 字符]")
+}
+
+async fn fetch_url_inner(
+    url: &str,
+    allowed_urls: &[String],
+    max_chars: Option<u64>,
+) -> Result<String, String> {
+    if !url_allowed_this_turn(url, allowed_urls) {
+        return Err("只能读取用户本轮消息中明确提供的 http/https URL".into());
+    }
+
+    let parsed = reqwest::Url::parse(url).map_err(|e| format!("URL 不合法: {}", e))?;
+    let max_chars = max_chars
+        .map(|n| n as usize)
+        .unwrap_or(FETCH_URL_DEFAULT_CHARS)
+        .clamp(1, FETCH_URL_MAX_CHARS);
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .timeout(Duration::from_secs(FETCH_URL_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("创建网页客户端失败: {}", e))?;
+
+    let resp = client
+        .get(parsed.clone())
+        .header(USER_AGENT, "Inkstatute/0.1 legal-research")
+        .send()
+        .await
+        .map_err(|e| format!("网页请求失败: {}", e))?;
+
+    let final_url = resp.url().to_string();
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+
+    if !status.is_success() {
+        return Err(format!("网页请求返回 HTTP {}", status.as_u16()));
+    }
+    if resp.content_length().unwrap_or(0) > FETCH_URL_MAX_BYTES {
+        return Err(format!("网页响应超过 {} 字节上限", FETCH_URL_MAX_BYTES));
+    }
+
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("读取网页正文失败: {}", e))?;
+    let readable = if content_type.to_lowercase().contains("html")
+        || body.trim_start().to_lowercase().starts_with("<!doctype")
+        || body.trim_start().to_lowercase().starts_with("<html")
+    {
+        html_to_readable_text(&body)
+    } else {
+        ReadablePage {
+            title: None,
+            text: compact_text_segments(body.lines()),
+        }
+    };
+    let text = truncate_with_notice(&readable.text, max_chars, "网页正文");
+    let mut out = vec![
+        format!("URL: {}", parsed),
+        format!("最终 URL: {}", final_url),
+        format!("Content-Type: {}", content_type),
+    ];
+    if let Some(title) = readable.title {
+        out.push(format!("标题: {}", title));
+    }
+    out.push(format!("正文摘录:\n{}", text));
+    Ok(out.join("\n"))
 }
 
 fn primary_workspace_root(ctx: &ToolContext<'_>) -> Result<String, String> {
@@ -179,6 +373,14 @@ pub async fn execute_tool(
                 .ok_or_else(|| "path required".to_string())?;
             let validated = resolve_read_path(ctx, path).await?;
             read_file_inner(&validated).await
+        }
+        "fetch_url" => {
+            let url = args
+                .get("url")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "url required".to_string())?;
+            let max_chars = args.get("max_chars").and_then(|v| v.as_u64());
+            fetch_url_inner(url, ctx.allowed_urls, max_chars).await
         }
         "generate_docx" => {
             let title = args
@@ -424,7 +626,9 @@ pub async fn stream_response(
                                             if let Some(t) = tracer {
                                                 t.emit("stream_delta", json!({ "text": content }));
                                             }
-                                            if !contains_tool_leakage(content) {
+                                            if !contains_tool_leakage(content)
+                                                && !contains_tool_leakage(&full_response)
+                                            {
                                                 let _ = app.emit(
                                                     "chat-stream",
                                                     StreamChunk {
@@ -619,5 +823,55 @@ mod tests {
         });
         let req = parse_ask_user_args(&args).expect("parse");
         assert_eq!(req.questions[0].allow_multiple, None);
+    }
+
+    #[test]
+    fn extracts_http_urls_from_user_text_and_trims_sentence_punctuation() {
+        let urls = extract_http_urls(
+            "参考 https://example.com/a?b=1，另见 http://docs.example.test/path.",
+        );
+        assert_eq!(
+            urls,
+            vec![
+                "https://example.com/a?b=1".to_string(),
+                "http://docs.example.test/path".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn fetch_url_must_be_from_current_user_turn() {
+        let allowed = vec!["https://example.com/a?b=1".to_string()];
+        assert!(url_allowed_this_turn("https://example.com/a?b=1", &allowed));
+        assert!(!url_allowed_this_turn(
+            "https://example.com/other",
+            &allowed
+        ));
+        assert!(!url_allowed_this_turn("file:///C:/secret.txt", &allowed));
+    }
+
+    #[test]
+    fn extracts_readable_text_from_html_without_script_or_style() {
+        let page = html_to_readable_text(
+            r#"<!doctype html>
+            <html>
+              <head><title>Example Title</title><style>.x{display:none}</style></head>
+              <body>
+                <script>console.log("secret")</script>
+                <main><h1>Heading</h1><p>First <strong>paragraph</strong>.</p></main>
+              </body>
+            </html>"#,
+        );
+        assert_eq!(page.title.as_deref(), Some("Example Title"));
+        assert!(page.text.contains("Heading"));
+        assert!(page.text.contains("First paragraph."));
+        assert!(!page.text.contains("secret"));
+    }
+
+    #[test]
+    fn truncates_url_content_by_char_count_with_notice() {
+        let text = "abcdef";
+        let truncated = truncate_with_notice(text, 4, "网页正文");
+        assert_eq!(truncated, "abcd\n\n[网页正文已截断，共 6 字符]");
     }
 }

@@ -13,7 +13,6 @@ import { DOC_TYPES } from "../../utils/docTypes";
 
 export interface HomePageProps {
   onStart: (prompt: string) => void;
-  onOpenConversations: () => void;
   onToast?: (msg: string) => void;
 }
 
@@ -156,14 +155,6 @@ export function HomePage(props: HomePageProps) {
         <div class="home-hi">
           <h1>{greetingByTime()}</h1>
           <span class="date">{formatToday()}</span>
-          <button
-            type="button"
-            class="home-history-btn"
-            onClick={props.onOpenConversations}
-          >
-            <Icon name="clock" />
-            会话列表
-          </button>
         </div>
         <p class="home-sub">
           描述你的需求，墨律将为你起草、检索法条判例并标注条款风险。也可以从下方示例快速填入。

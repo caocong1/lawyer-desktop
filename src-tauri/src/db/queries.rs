@@ -83,6 +83,31 @@ pub async fn update_conversation_title(
     Ok(())
 }
 
+/// Update the title together with `settings_json` (carrying `title_source`).
+/// Manual renames call this with `source=manual` to lock the title from
+/// auto-titling; `maybe_auto_title` writes `source=auto`.
+pub async fn update_conversation_title_and_source(
+    pool: &Pool<Sqlite>,
+    id: &str,
+    title: &str,
+    settings_json: &str,
+) -> anyhow::Result<()> {
+    let now = Utc::now().to_rfc3339();
+
+    sqlx::query(
+        "UPDATE conversations SET title = ?, updated_at = ?, settings_json = ? WHERE id = ?",
+    )
+    .bind(title)
+    .bind(&now)
+    .bind(settings_json)
+    .bind(id)
+    .execute(pool)
+    .await
+    .context("failed to update conversation title and source")?;
+
+    Ok(())
+}
+
 pub async fn delete_conversation(pool: &Pool<Sqlite>, id: &str) -> anyhow::Result<()> {
     sqlx::query("DELETE FROM conversations WHERE id = ?")
         .bind(id)

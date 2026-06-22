@@ -12,6 +12,7 @@ import { containsToolLeakage } from "../../utils/legalDocument";
 import type { ContextRefPayload } from "../../types/contextRefs";
 import { classifyDroppedPaths, onChatStream, onWorkspaceIndexProgress } from "../../services/api";
 import type { ClarificationAnswer, WorkflowState } from "../../types/workflow";
+import type { UserAttachmentCard } from "../../utils/contextRefs";
 import {
   formatFullTime,
   formatTimeDivider,
@@ -19,6 +20,7 @@ import {
   shouldShowTimeDivider,
 } from "../../utils/chatTime";
 import { isVisibleChatMessage } from "../../utils/chatVisibility";
+import { canSendWithContext } from "../../utils/contextRefs";
 import { MessageFeedback } from "./MessageFeedback";
 import { Icon } from "../icons/Icons";
 import { MentionComposer } from "../MentionComposer";
@@ -45,6 +47,24 @@ function AssistantContent(props: { text: string }) {
   return (
     <div class="prose chat-md">
       <SolidMarkdown remarkPlugins={[remarkGfm]}>{props.text}</SolidMarkdown>
+    </div>
+  );
+}
+
+function UserAttachment(props: { attachment: UserAttachmentCard }) {
+  const icon = () => (props.attachment.tone === "folder" ? "folder" : "file2");
+  return (
+    <div
+      class={`user-attachment-card ${props.attachment.tone}`}
+      title={props.attachment.path ?? props.attachment.alias}
+    >
+      <span class="user-attachment-icon">
+        <Icon name={icon()} />
+      </span>
+      <span class="user-attachment-meta">
+        <span class="user-attachment-name">{props.attachment.alias}</span>
+        <span class="user-attachment-type">{props.attachment.typeLabel}</span>
+      </span>
     </div>
   );
 }
@@ -114,6 +134,7 @@ export function ChatPanel(props: ChatPanelProps) {
     setStreamStatus,
     activeConversationId,
     messageDisplayContent,
+    messageDisplayParts,
     messageWorkflow,
     activeWorkflow,
     submitClarificationAnswers,
@@ -273,7 +294,7 @@ export function ChatPanel(props: ChatPanelProps) {
 
   function send() {
     const t = text().trim();
-    if (!t || props.sending()) return;
+    if (!canSendWithContext(t, pendingContextRefs(), props.sending())) return;
     setText("");
     composer?.clear();
     props.onSend(t);
@@ -372,6 +393,8 @@ export function ChatPanel(props: ChatPanelProps) {
     });
   }
 
+  const canSubmit = () => canSendWithContext(text(), pendingContextRefs(), props.sending());
+
   return (
     <div class="chat">
       <div class="chat-ctx">
@@ -404,8 +427,8 @@ export function ChatPanel(props: ChatPanelProps) {
             <div class="msg msg-agent">
               <div class="ava">墨</div>
               <div class="agent-body">
-                <div class="agent-name">墨律 · 法律文书助理</div>
-                <AssistantContent text="描述你的起草需求，或在下方向我补充指示。" />
+                <div class="agent-name">墨律 · 法律问答与文书助理</div>
+                <AssistantContent text="描述法律问题、资料链接或起草需求，我会按需要检索法规、案例与公开资料。" />
               </div>
             </div>
           }
@@ -428,15 +451,27 @@ export function ChatPanel(props: ChatPanelProps) {
                 );
               }
               const m = item.message;
+              const displayParts = () => messageDisplayParts(m);
               return m.role === "user" ? (
                 <div class="msg msg-user" title={timeTitle(item.tsMs)}>
-                  <div class="bubble-user">{m.content}</div>
+                  <div class="user-msg-stack">
+                    <Show when={displayParts().attachments.length > 0}>
+                      <div class="user-attachments">
+                        <For each={displayParts().attachments}>
+                          {(attachment) => <UserAttachment attachment={attachment} />}
+                        </For>
+                      </div>
+                    </Show>
+                    <Show when={displayParts().text.trim()}>
+                      {(content) => <div class="bubble-user">{content()}</div>}
+                    </Show>
+                  </div>
                 </div>
               ) : (
                 <div class="msg msg-agent" title={timeTitle(item.tsMs)}>
                   <div class="ava">墨</div>
                   <div class="agent-body">
-                    <div class="agent-name">墨律 · 法律文书助理</div>
+                    <div class="agent-name">墨律 · 法律问答与文书助理</div>
                     <Show when={messageDisplayContent(m).trim()}>
                       {(content) => <AssistantContent text={content()} />}
                     </Show>
@@ -478,7 +513,7 @@ export function ChatPanel(props: ChatPanelProps) {
           <div class="msg msg-agent" title={formatFullTime(Date.now())}>
             <div class="ava">墨</div>
             <div class="agent-body">
-              <div class="agent-name">墨律 · 法律文书助理</div>
+              <div class="agent-name">墨律 · 法律问答与文书助理</div>
               <AssistantContent text={streamingContent()} />
             </div>
           </div>
@@ -487,7 +522,7 @@ export function ChatPanel(props: ChatPanelProps) {
           <div class="msg msg-agent">
             <div class="ava">墨</div>
             <div class="agent-body">
-              <div class="agent-name">墨律 · 法律文书助理</div>
+              <div class="agent-name">墨律 · 法律问答与文书助理</div>
               <div class="streaming-wait">
                 <span class="streaming-wait-dot" />
                 {phaseLabel()}
@@ -499,7 +534,7 @@ export function ChatPanel(props: ChatPanelProps) {
           <div class="msg msg-agent">
             <div class="ava">墨</div>
             <div class="agent-body">
-              <div class="agent-name">墨律 · 法律文书助理</div>
+              <div class="agent-name">墨律 · 法律问答与文书助理</div>
               <div class="streaming-wait">
                 <span class="streaming-wait-dot" />
                 {phaseLabel()}
@@ -514,13 +549,14 @@ export function ChatPanel(props: ChatPanelProps) {
             !showEvidenceProgress() &&
             !activeDraftResponse() &&
             !activeEvidenceResponse() &&
-            streamingContent()
+            streamingContent() &&
+            !containsToolLeakage(streamingContent())
           }
         >
           <div class="msg msg-agent">
             <div class="ava">墨</div>
             <div class="agent-body">
-              <div class="agent-name">墨律 · 法律文书助理</div>
+              <div class="agent-name">墨律 · 法律问答与文书助理</div>
               <AssistantContent text={streamingContent()} />
             </div>
           </div>
@@ -530,7 +566,7 @@ export function ChatPanel(props: ChatPanelProps) {
             <div class="msg msg-agent">
               <div class="ava">墨</div>
               <div class="agent-body">
-                <div class="agent-name">墨律 · 法律文书助理</div>
+                <div class="agent-name">墨律 · 法律问答与文书助理</div>
                 <ModeSwitchCard
                   curLabel={pending().curLabel}
                   newLabel={pending().newLabel}
@@ -597,7 +633,7 @@ export function ChatPanel(props: ChatPanelProps) {
           <div class="textarea-wrap">
             <MentionComposer
               class="chat-input"
-              placeholder="补充指示，或描述新的起草需求……"
+              placeholder="描述法律问题、资料链接或新的起草需求……"
               disabled={props.sending()}
               candidates={pendingContextRefs()}
               onReady={(api) => (composer = api)}
@@ -655,7 +691,7 @@ export function ChatPanel(props: ChatPanelProps) {
               type="button"
               class="send-btn"
               onClick={send}
-              disabled={!text().trim() || props.sending()}
+              disabled={!canSubmit()}
             >
               发送
               <Icon name="send" />

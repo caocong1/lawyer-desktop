@@ -114,6 +114,14 @@ const CLASSIFIER_SYSTEM: &str = r#"你是墨律 Inkstatute 的任务路由器。
 10. 消息以「以下是补充信息」开头说明用户在回答此前任务的澄清问题：action=continue；附加目录为「是」时 evidence；提到起草/文书时 draft；不要选 chat。
 "#;
 
+const CLASSIFIER_POLICY_SUPPLEMENT: &str = r#"## 墨律当前路由边界（优先遵守）
+1. chat 是默认底座：法律咨询、法规适用分析、法律研究、风险评估、流程说明、谈判建议、书面分析性答复，默认都走 chat。
+2. 只有用户明确要求生成具体正式文书/文档产物（例如合同、起诉状、答辩状、正式法律意见书、正式报告并要求作为交付物）时才选 draft。
+3. 只有用户要求基于本地案卷/目录资料生成独立诉讼方案、案情分析报告、证据梳理报告时才选 evidence。
+4. 不要用单个词触发模式切换；必须结合整条消息、附件/目录、本轮上下文和当前任务判断。
+5. 不确定时选 chat；分类失败时系统会结构性降级，模型不要为了“稳妥”把问答误判为 draft。
+"#;
+
 pub async fn classify_agent_mode(
     provider: &dyn LlmProvider,
     ctx: &ClassifyContext,
@@ -136,7 +144,11 @@ pub async fn classify_agent_mode(
         },
         ctx.current_mode.as_deref().unwrap_or("无"),
         ctx.current_task_label.as_deref().unwrap_or("无"),
-        if ctx.has_active_document { "是" } else { "否" },
+        if ctx.has_active_document {
+            "是"
+        } else {
+            "否"
+        },
     );
 
     let request = ChatRequest {
@@ -145,7 +157,7 @@ pub async fn classify_agent_mode(
             ChatMessage {
                 reasoning_content: None,
                 role: "system".into(),
-                content: CLASSIFIER_SYSTEM.into(),
+                content: format!("{}\n\n{}", CLASSIFIER_SYSTEM, CLASSIFIER_POLICY_SUPPLEMENT),
                 name: None,
                 tool_calls: None,
                 tool_call_id: None,
@@ -181,6 +193,28 @@ pub async fn classify_agent_mode(
             fallback_classify(ctx, reason, Some(diagnostic))
         }
     }
+}
+
+pub async fn classify_agent_mode_with_retry(
+    fast_provider: &dyn LlmProvider,
+    primary_provider: &dyn LlmProvider,
+    ctx: &ClassifyContext,
+) -> ClassifyResult {
+    let fast = classify_agent_mode(fast_provider, ctx).await;
+    if fast.source != "fallback" {
+        return fast;
+    }
+
+    log::warn!(
+        "fast agent classify fell back (reason={:?}); retrying with primary model",
+        fast.fallback_reason
+    );
+    let primary = classify_agent_mode(primary_provider, ctx).await;
+    if primary.source != "fallback" {
+        return primary;
+    }
+
+    primary
 }
 
 fn parse_classifier_response(raw: &str, ctx: &ClassifyContext) -> ClassifyResult {
@@ -292,28 +326,46 @@ fn extract_json_object(text: &str) -> Option<&str> {
 }
 
 pub fn parse_mode_str(s: &str) -> Option<AgentMode> {
-    match s.trim().to_lowercase().as_str() {
-        "draft" | "文书" | "起草" => Some(AgentMode::Draft),
-        "evidence" | "案情" | "诉讼" | "分析" => Some(AgentMode::Evidence),
-        "chat" | "咨询" | "问答" => Some(AgentMode::Chat),
+    let compact: String = s
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter(|c| !matches!(c, ' ' | '_' | '-' | '　'))
+        .collect();
+    match compact.as_str() {
+        "draft" | "document" | "doc" | "文书" | "起草" | "文书起草" | "法律文书"
+        | "法律文书起草" => Some(AgentMode::Draft),
+        "evidence" | "caseanalysis" | "case" | "案情" | "案情分析" | "诉讼" | "诉讼方案"
+        | "分析" | "证据" | "证据分析" => Some(AgentMode::Evidence),
+        "chat" | "qa" | "q&a" | "咨询" | "问答" | "法律问答" | "法律咨询" => {
+            Some(AgentMode::Chat)
+        }
         _ => None,
     }
 }
 
-/// Structural fallback only (no regex on user text).
+/// Failure fallback deliberately uses only structural context, never user-text
+/// keyword matching. The actual matter type is decided by the AI classifier.
 fn fallback_classify(
     ctx: &ClassifyContext,
     fallback_reason: &str,
     diagnostic: Option<String>,
 ) -> ClassifyResult {
-    let mode = if ctx.has_directory_ref {
-        AgentMode::Evidence
+    let mode = if ctx.has_active_document {
+        ctx.current_mode
+            .as_deref()
+            .and_then(parse_mode_str)
+            .unwrap_or(AgentMode::Chat)
     } else {
         AgentMode::Chat
     };
     ClassifyResult {
-        label: mode.ui_label().to_string(),
-        reason: "已用本地规则判断事项类型".into(),
+        label: ctx
+            .current_task_label
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| mode.ui_label().to_string()),
+        reason: "AI 分类失败，已使用结构性安全默认模式".into(),
         mode,
         // A fallback must never surprise-switch the user's committed task.
         action: "continue".into(),
@@ -326,6 +378,92 @@ fn fallback_classify(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llm::provider::{ChatStream, LlmProvider};
+    use crate::llm::types::{ChatMessage, ChatResponse, Choice, ProviderConfig};
+    use anyhow::Result;
+    use async_trait::async_trait;
+    use futures::stream;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    struct MockClassifierProvider {
+        model: String,
+        reply: Result<String, String>,
+        calls: Arc<AtomicUsize>,
+        config: ProviderConfig,
+    }
+
+    impl MockClassifierProvider {
+        fn new(model: &str, reply: Result<&str, &str>) -> Self {
+            Self {
+                model: model.into(),
+                reply: reply.map(str::to_string).map_err(str::to_string),
+                calls: Arc::new(AtomicUsize::new(0)),
+                config: ProviderConfig {
+                    id: model.into(),
+                    name: model.into(),
+                    display_name: model.into(),
+                    api_base_url: "http://example.invalid/v1".into(),
+                    api_key: None,
+                    model_name: model.into(),
+                    temperature: None,
+                    max_tokens: None,
+                },
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl LlmProvider for MockClassifierProvider {
+        async fn chat(&self, _request: &crate::llm::types::ChatRequest) -> Result<ChatResponse> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            match &self.reply {
+                Ok(content) => Ok(ChatResponse {
+                    id: Some("mock".into()),
+                    choices: vec![Choice {
+                        index: 0,
+                        message: Some(ChatMessage {
+                            reasoning_content: None,
+                            role: "assistant".into(),
+                            content: content.clone(),
+                            name: None,
+                            tool_calls: None,
+                            tool_call_id: None,
+                        }),
+                        delta: None,
+                        finish_reason: Some("stop".into()),
+                    }],
+                    usage: None,
+                }),
+                Err(e) => anyhow::bail!(e.clone()),
+            }
+        }
+
+        async fn chat_stream(
+            &self,
+            _request: &crate::llm::types::ChatRequest,
+        ) -> Result<ChatStream> {
+            Ok(Box::pin(stream::empty()))
+        }
+
+        fn supports_tools(&self) -> bool {
+            false
+        }
+
+        fn model_name(&self) -> &str {
+            &self.model
+        }
+
+        fn config(&self) -> &ProviderConfig {
+            &self.config
+        }
+    }
 
     #[test]
     fn parses_classifier_json() {
@@ -358,6 +496,73 @@ mod tests {
             current_task_label: current_mode.map(|_| "股权转让协议起草".to_string()),
             has_active_document: has_doc,
         }
+    }
+
+    #[test]
+    fn aviation_regulatory_risk_question_is_chat_when_llm_classifies_it() {
+        let ctx = ctx_with(
+            "ICAO technical instructions supplement applies to power bank carriage. Analyze enforcement legal risk.",
+            None,
+            false,
+        );
+        let r = parse_classifier_response(
+            r#"{"mode":"chat","action":"continue","label":"aviation regulatory risk","reason":"risk analysis answer, not a formal document"}"#,
+            &ctx,
+        );
+        assert_eq!(r.mode, AgentMode::Chat);
+        assert_eq!(r.action, "continue");
+        assert_eq!(r.label, "aviation regulatory risk");
+    }
+
+    #[test]
+    fn formal_legal_opinion_document_is_draft_when_llm_classifies_it() {
+        let ctx = ctx_with(
+            "Generate a formal legal opinion document for client submission.",
+            None,
+            false,
+        );
+        let r = parse_classifier_response(
+            r#"{"mode":"draft","action":"continue","label":"legal opinion drafting","reason":"the user asks for a formal document artifact"}"#,
+            &ctx,
+        );
+        assert_eq!(r.mode, AgentMode::Draft);
+        assert_eq!(r.label, "legal opinion drafting");
+    }
+
+    #[tokio::test]
+    async fn retry_uses_primary_when_fast_classifier_falls_back() {
+        let ctx = ctx_with(
+            "Analyze this regulatory requirement and risks.",
+            None,
+            false,
+        );
+        let fast = MockClassifierProvider::new("fast", Ok(""));
+        let primary = MockClassifierProvider::new(
+            "primary",
+            Ok(r#"{"mode":"chat","label":"regulatory risk answer","reason":"answer in chat"}"#),
+        );
+
+        let r = classify_agent_mode_with_retry(&fast, &primary, &ctx).await;
+
+        assert_eq!(r.mode, AgentMode::Chat);
+        assert_eq!(r.source, "llm");
+        assert_eq!(r.label, "regulatory risk answer");
+        assert_eq!(fast.calls(), 1);
+        assert_eq!(primary.calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn double_classifier_failure_degrades_to_current_committed_mode() {
+        let ctx = ctx_with("Continue revising clause 3.", Some("draft"), true);
+        let fast = MockClassifierProvider::new("fast", Err("fast down"));
+        let primary = MockClassifierProvider::new("primary", Err("primary down"));
+
+        let r = classify_agent_mode_with_retry(&fast, &primary, &ctx).await;
+
+        assert_eq!(r.mode, AgentMode::Draft);
+        assert_eq!(r.source, "fallback");
+        assert_eq!(r.action, "continue");
+        assert!(!r.label.is_empty());
     }
 
     #[test]
@@ -395,10 +600,25 @@ mod tests {
     #[test]
     fn parses_qa_mode_alias() {
         assert_eq!(parse_mode_str("问答"), Some(AgentMode::Chat));
+        assert_eq!(parse_mode_str("法律问答"), Some(AgentMode::Chat));
+        assert_eq!(parse_mode_str("文书起草"), Some(AgentMode::Draft));
+        assert_eq!(parse_mode_str("案情分析"), Some(AgentMode::Evidence));
     }
 
     #[test]
-    fn fallback_uses_directory_not_regex() {
+    fn parses_llm_chinese_mode_label_for_draft() {
+        let ctx = ctx_with("帮我起草一份劳动合同", None, false);
+        let r = parse_classifier_response(
+            r#"{"mode":"文书起草","action":"continue","label":"劳动合同起草","reason":"用户要生成正式文书"}"#,
+            &ctx,
+        );
+        assert_eq!(r.mode, AgentMode::Draft);
+        assert_eq!(r.label, "劳动合同起草");
+        assert_eq!(r.source, "llm");
+    }
+
+    #[test]
+    fn fallback_defaults_to_chat_without_current_artifact() {
         let ctx = ClassifyContext {
             user_message: "生成诉讼方案".into(),
             has_directory_ref: true,
@@ -409,9 +629,29 @@ mod tests {
             has_active_document: false,
         };
         let r = fallback_classify(&ctx, "request_failed", Some("boom".into()));
-        assert_eq!(r.mode, AgentMode::Evidence);
+        assert_eq!(r.mode, AgentMode::Chat);
         assert_eq!(r.source, "fallback");
         assert_eq!(r.fallback_reason.as_deref(), Some("request_failed"));
+    }
+
+    #[test]
+    fn fallback_does_not_infer_draft_from_user_text() {
+        let ctx = ClassifyContext {
+            user_message:
+                "帮我起草一份劳动合同：甲方杭州某科技有限公司招聘乙方王五担任高级软件工程师，月薪人民币25,000元，合同期限三年。"
+                    .into(),
+            has_directory_ref: false,
+            has_file_ref: false,
+            directory_aliases: vec![],
+            current_mode: None,
+            current_task_label: None,
+            has_active_document: false,
+        };
+        let r = parse_classifier_response("不是 JSON", &ctx);
+        assert_eq!(r.mode, AgentMode::Chat);
+        assert_eq!(r.label, "法律问答");
+        assert_eq!(r.source, "fallback");
+        assert_eq!(r.fallback_reason.as_deref(), Some("invalid_json"));
     }
 
     #[test]
@@ -444,6 +684,7 @@ mod tests {
             has_active_document: false,
         };
         let r = parse_classifier_response(r#"{"mode":"other"}"#, &ctx);
+        assert_eq!(r.mode, AgentMode::Chat);
         assert_eq!(r.source, "fallback");
         assert_eq!(r.fallback_reason.as_deref(), Some("invalid_mode"));
     }

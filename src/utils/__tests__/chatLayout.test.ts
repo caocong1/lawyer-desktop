@@ -80,4 +80,29 @@ describe("shouldShowPreview", () => {
     expect(shouldShowPreview({ ...base, hasLegalDocument: true })).toBe(true);
     expect(shouldShowPreview({ ...base, hasMarkdownDoc: true })).toBe(true);
   });
+
+  // The very first auto-send on a new conversation must show the right
+  // preview immediately, even before any backend trace events arrive.
+  // dispatchTurn optimistically writes workspaceMode/draftWorkflowActive/
+  // activeEvidenceResponse from forcedMode; this test pins that pre-trace
+  // shape so a regression that only checks committedMode() won't break it.
+  it("shows the first-draft preview before any trace event lands", () => {
+    expect(
+      shouldShowPreview({
+        ...base,
+        workspaceMode: "draft",
+        draftWorkflowActive: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("shows the first-evidence preview before any trace event lands", () => {
+    expect(
+      shouldShowPreview({
+        ...base,
+        workspaceMode: "evidence",
+        activeEvidenceResponse: true,
+      }),
+    ).toBe(true);
+  });
 });

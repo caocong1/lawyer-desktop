@@ -3,6 +3,7 @@ import { Icon } from "../icons/Icons";
 import { useConversation, type Conversation } from "../../stores/conversation";
 import { formatFullTime, parseTimeMs } from "../../utils/chatTime";
 import { iconForConversationTitle } from "../../utils/docTypes";
+import { validateConversationTitle } from "../../utils/conversationTitle";
 import "./ConversationDrawer.css";
 
 export interface ConversationDrawerProps {
@@ -47,10 +48,15 @@ export function ConversationDrawer(props: ConversationDrawerProps) {
     activeConversationId,
     loadConversations,
     removeConversation,
+    renameConversation,
   } = useConversation();
   const [query, setQuery] = createSignal("");
   const [deletingId, setDeletingId] = createSignal<string | null>(null);
+  const [editingId, setEditingId] = createSignal<string | null>(null);
+  const [editingDraft, setEditingDraft] = createSignal("");
+  const [savingRenameId, setSavingRenameId] = createSignal<string | null>(null);
   let searchRef: HTMLInputElement | undefined;
+  let editInputRef: HTMLInputElement | undefined;
 
   const filtered = createMemo(() =>
     conversations().filter((conversation) => matchesQuery(conversation, query())),
@@ -62,6 +68,14 @@ export function ConversationDrawer(props: ConversationDrawerProps) {
     queueMicrotask(() => searchRef?.focus());
   });
 
+  // Closing the drawer always drops any in-flight edit so reopening starts fresh.
+  createEffect(() => {
+    if (!props.open) {
+      setEditingId(null);
+      setEditingDraft("");
+    }
+  });
+
   onMount(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && props.open) props.onClose();
@@ -69,6 +83,44 @@ export function ConversationDrawer(props: ConversationDrawerProps) {
     window.addEventListener("keydown", onKeyDown);
     onCleanup(() => window.removeEventListener("keydown", onKeyDown));
   });
+
+  function startEditing(conversation: Conversation) {
+    setEditingId(conversation.id);
+    setEditingDraft(conversation.title || "");
+    queueMicrotask(() => {
+      editInputRef?.focus();
+      editInputRef?.select();
+    });
+  }
+
+  function cancelEditing() {
+    setEditingId(null);
+    setEditingDraft("");
+  }
+
+  async function commitEdit(conversation: Conversation) {
+    if (savingRenameId() === conversation.id) return;
+    const result = validateConversationTitle(editingDraft());
+    if (!result.ok) {
+      props.onToast?.(result.error);
+      return;
+    }
+    const next = result.value;
+    if (next === conversation.title) {
+      cancelEditing();
+      return;
+    }
+    setSavingRenameId(conversation.id);
+    try {
+      await renameConversation(conversation.id, next);
+      cancelEditing();
+    } catch (error) {
+      console.error("重命名会话失败:", error);
+      props.onToast?.(`重命名失败: ${String(error)}`);
+    } finally {
+      setSavingRenameId(null);
+    }
+  }
 
   async function deleteConversation(event: MouseEvent | KeyboardEvent, conversation: Conversation) {
     event.stopPropagation();
@@ -140,51 +192,112 @@ export function ConversationDrawer(props: ConversationDrawerProps) {
               }
             >
               <For each={filtered()}>
-                {(conversation) => (
-                  <div
-                    class={`conversation-row${
-                      activeConversationId() === conversation.id ? " active" : ""
-                    }`}
-                    role="button"
-                    tabIndex={0}
-                    title={fullTime(conversation.updated_at)}
-                    onClick={() => props.onOpenConversation(conversation.id)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        props.onOpenConversation(conversation.id);
-                      }
-                    }}
-                  >
-                    <span class="conversation-row-ic">
-                      <Icon name={iconForConversationTitle(conversation.title)} />
-                    </span>
-                    <span class="conversation-row-main">
-                      <span class="conversation-row-title">{conversation.title || "新会话"}</span>
-                      <span class="conversation-row-meta">{formatRelativeTime(conversation.updated_at)}</span>
-                    </span>
-                    <button
-                      type="button"
-                      class="conversation-delete"
-                      aria-label={`删除 ${conversation.title || "新会话"}`}
-                      title="删除"
-                      onClick={(event) => void deleteConversation(event, conversation)}
+                {(conversation) => {
+                  const isEditing = () => editingId() === conversation.id;
+                  const isSaving = () => savingRenameId() === conversation.id;
+                  return (
+                    <div
+                      class={`conversation-row${
+                        activeConversationId() === conversation.id ? " active" : ""
+                      }${isEditing() ? " editing" : ""}`}
+                      role="button"
+                      tabIndex={isEditing() ? -1 : 0}
+                      title={isEditing() ? undefined : fullTime(conversation.updated_at)}
+                      onClick={() => {
+                        if (!isEditing()) props.onOpenConversation(conversation.id);
+                      }}
                       onKeyDown={(event) => {
+                        if (isEditing()) return;
                         if (event.key === "Enter" || event.key === " ") {
                           event.preventDefault();
-                          void deleteConversation(event, conversation);
+                          props.onOpenConversation(conversation.id);
                         }
                       }}
                     >
+                      <span class="conversation-row-ic">
+                        <Icon name={iconForConversationTitle(conversation.title)} />
+                      </span>
+                      <span class="conversation-row-main">
+                        <Show
+                          when={isEditing()}
+                          fallback={
+                            <span class="conversation-row-title">
+                              {conversation.title || "新会话"}
+                            </span>
+                          }
+                        >
+                          <input
+                            ref={editInputRef}
+                            class="conversation-row-edit"
+                            value={editingDraft()}
+                            maxLength={30}
+                            aria-label="重命名会话"
+                            disabled={isSaving()}
+                            onInput={(event) => setEditingDraft(event.currentTarget.value)}
+                            onClick={(event) => event.stopPropagation()}
+                            onKeyDown={(event) => {
+                              event.stopPropagation();
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                void commitEdit(conversation);
+                              } else if (event.key === "Escape") {
+                                event.preventDefault();
+                                cancelEditing();
+                              }
+                            }}
+                            onBlur={() => {
+                              if (isEditing()) void commitEdit(conversation);
+                            }}
+                          />
+                        </Show>
+                        <span class="conversation-row-meta">
+                          {formatRelativeTime(conversation.updated_at)}
+                        </span>
+                      </span>
                       <Show
-                        when={deletingId() === conversation.id}
-                        fallback={<Icon name="trash" />}
+                        when={isEditing()}
+                        fallback={
+                          <span class="conversation-row-actions">
+                            <button
+                              type="button"
+                              class="conversation-icon-action"
+                              aria-label={`重命名 ${conversation.title || "新会话"}`}
+                              title="重命名"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                startEditing(conversation);
+                              }}
+                            >
+                              <Icon name="edit" />
+                            </button>
+                            <button
+                              type="button"
+                              class="conversation-delete"
+                              aria-label={`删除 ${conversation.title || "新会话"}`}
+                              title="删除"
+                              onClick={(event) => void deleteConversation(event, conversation)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter" || event.key === " ") {
+                                  event.preventDefault();
+                                  void deleteConversation(event, conversation);
+                                }
+                              }}
+                            >
+                              <Show
+                                when={deletingId() === conversation.id}
+                                fallback={<Icon name="trash" />}
+                              >
+                                <span class="conversation-mini-spinner" />
+                              </Show>
+                            </button>
+                          </span>
+                        }
                       >
                         <span class="conversation-mini-spinner" />
                       </Show>
-                    </button>
-                  </div>
-                )}
+                    </div>
+                  );
+                }}
               </For>
             </Show>
           </div>

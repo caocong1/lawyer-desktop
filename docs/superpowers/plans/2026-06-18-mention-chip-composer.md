@@ -994,12 +994,12 @@ git commit -m "feat(chat): use MentionComposer with atomic mention chips and @ b
 
 **Files:** none (verification only).
 
-- [ ] **Step 1: Run the full unit suite**
+- [x] **Step 1: Run the full unit suite**
 
 Run: `npm test`
 Expected: all tests pass, including `mentions.test.ts` and `MentionComposer.test.tsx`.
 
-- [ ] **Step 2: Typecheck + production build**
+- [x] **Step 2: Typecheck + production build**
 
 Run: `npm run build`
 Expected: PASS, no TypeScript errors.

@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  containsToolLeakage,
   extractDraftOutputEnvelope,
   isPublishableDocument,
   markdownToLegalDocument,
   markdownReportTitle,
   modelToArticles,
   modelToParties,
+  sanitizeLlmDocumentContent,
   splitMarkdownBlocks,
   stripReportPreamble,
 } from "../legalDocument";
@@ -213,5 +215,31 @@ describe("evidence report markdown helpers", () => {
   it("falls back to the provided label, then a generic title", () => {
     expect(markdownReportTitle("无标题正文", "案情分析")).toBe("案情分析");
     expect(markdownReportTitle("无标题正文")).toBe("案卷分析报告");
+  });
+});
+
+describe("tool-call residue cleanup", () => {
+  it("detects and strips bare tool-call fragments without XML openers", () => {
+    const leaked =
+      'tool_calls> parameter name lawName string="true">最高人民法院审理建设工程施工纠纷适用法律问题的解释（） invoke>';
+
+    expect(containsToolLeakage(leaked)).toBe(true);
+    expect(sanitizeLlmDocumentContent(leaked)).toBe("");
+  });
+
+  it("detects a malformed parameter-only fragment", () => {
+    const leaked =
+      'parameter name lawName string="true">最高人民法院审理建设工程施工纠纷适用法律问题的解释（）';
+
+    expect(containsToolLeakage(leaked)).toBe(true);
+    expect(sanitizeLlmDocumentContent(leaked)).toBe("");
+  });
+
+  it("detects the shortened tool_c and _calls fragment shown in chat", () => {
+    const leaked =
+      'tool_c>< name="law_name"="true">中华人民共和国民 </_calls>';
+
+    expect(containsToolLeakage(leaked)).toBe(true);
+    expect(sanitizeLlmDocumentContent(leaked)).toBe("");
   });
 });

@@ -319,7 +319,7 @@ export function modelToDocMeta(model: LegalDocumentModel): DocMeta {
 const CHAT_SUMMARY_MARKER = "正文见右侧文书预览";
 
 const TOOL_LEAK_RE =
-  /<\/?tool_calls?>|<\/?invoke|invoke\s+name\s*=|parameter\s+name\s*=|toolalls|function_call|<\|[^|]+\|>|\|\s*\|\s*DSML|DSML/i;
+  /<\/?tool_calls?>|\btool_?c(?:alls?)?\b\s*>?|<\/?_calls?>|<\s*name\s*=|<\/?invoke\b|\binvoke\s*(?:name\s*=|=|>)|\bparameter\s+name(?:\s*=|\s+[^\s=>]+)|toolalls|function_call|<\|[^|]+\|>|\|\s*\|\s*DSML|DSML/i;
 
 const INSTRUCTION_TITLE_RE = /^(写一份|起草|生成|帮我|请)/;
 
@@ -447,15 +447,19 @@ export function sanitizeLlmDocumentContent(text: string): string {
   s = s.replace(/<\|[^|>]*\|>/g, "");
   s = s.replace(/\|\s*\|\s*DSML\s*\|\s*\|/gi, "");
   s = s.replace(/<tool_calls?>[\s\S]*?<\/tool_calls?>/gi, "");
+  s = s.replace(/<?tool_?c(?:alls?)?[^>\n]*>[\s\S]*?<\/?_calls?>/gi, "");
   s = s.replace(/<invoke[\s\S]*?<\/invoke>/gi, "");
   s = s.replace(/<invoke[\s\S]*?(?=<invoke|$)/gi, "");
   s = s.replace(/```[\s\S]*?```/g, (block) =>
     TOOL_LEAK_RE.test(block) ? "" : block,
   );
   s = s.replace(/^#{1,3}\s*第[一二三四五六七八九十\d]+步[^\n]*\n?/gm, "");
-  s = s.replace(/^.*(?:DSML|toolalls|parameter\s+name\s*=|invoke\s+name\s*=|<\|)[^\n]*\n?/gim, "");
+  s = s.replace(
+    /^.*(?:DSML|tool_?c(?:alls?)?|<\/?_calls?>|<\s*name\s*=|toolalls|parameter\s+name(?:\s*=|\s+[^\s=>]+)|invoke\s*(?:name\s*=|=|>)|function_call|<\|)[^\n]*\n?/gim,
+    "",
+  );
   // Only strip known tool-leak XML tags, not legitimate HTML in legal docs.
-  s = s.replace(/<\/?(?:tool_calls?|invoke|parameter|function_call|dsml)[^>\n]*>/gi, "");
+  s = s.replace(/<\/?(?:tool_calls?|_calls?|invoke|parameter|function_call|dsml)[^>\n]*>/gi, "");
 
   return s.replace(/\n{3,}/g, "\n\n").trim();
 }

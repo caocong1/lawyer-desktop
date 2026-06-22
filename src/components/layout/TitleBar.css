@@ -18,6 +18,40 @@
   app-region: no-drag;
 }
 
+.tb-conv-list {
+  width: 30px;
+  height: 30px;
+  margin-left: 6px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  color: var(--muted);
+  border: none;
+  background: transparent;
+  transition: background 0.15s, color 0.15s;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.tb-conv-list:hover {
+  background: var(--accent-dim);
+  color: var(--ink);
+}
+
+.tb-conv-list:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 2px;
+}
+
+.tb-conv-list svg {
+  width: 17px;
+  height: 17px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.6;
+}
+
 .tb-dot {
   border: none;
   padding: 0;

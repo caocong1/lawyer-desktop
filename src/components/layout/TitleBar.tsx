@@ -3,8 +3,6 @@ import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Icon } from "../icons/Icons";
 import { useTheme, type ThemeVariant } from "../../stores/theme";
-import { agentModeLabel } from "../../types/agentMode";
-import { useConversation } from "../../stores/conversation";
 import "./TitleBar.css";
 
 export interface TitleBarProps {
@@ -76,24 +74,7 @@ function WinCloseIcon() {
 export function TitleBar(props: TitleBarProps) {
   const isMac = isMacOS();
   const { theme, setTheme } = useTheme();
-  const { conversations, activeConversationId, workspaceMode, workspaceModeLabel } =
-    useConversation();
   const [isMaximized, setIsMaximized] = createSignal(false);
-
-  const conversationTitle = () => {
-    const id = activeConversationId();
-    if (!id) return "新会话";
-    const conv = conversations().find((c) => c.id === id);
-    return conv?.title || "新会话";
-  };
-
-  const documentTitle = () => {
-    const mode = workspaceMode();
-    if (mode !== "idle") {
-      return workspaceModeLabel() || agentModeLabel(mode);
-    }
-    return "墨律";
-  };
 
   onMount(() => {
     if (!isTauri()) return;
@@ -173,6 +154,15 @@ export function TitleBar(props: TitleBarProps) {
           墨律<small>Inkstatute</small>
         </div>
       </div>
+      <button
+        type="button"
+        class="tb-conv-list tb-no-drag"
+        title="会话列表"
+        aria-label="会话列表"
+        onClick={props.onOpenConversations}
+      >
+        <Icon name="grid" />
+      </button>
       <div
         class="tb-crumbs"
         {...(isMac
@@ -181,16 +171,7 @@ export function TitleBar(props: TitleBarProps) {
               onMouseDown: handleMacDragMouseDown,
             }
           : {})}
-      >
-        <Show
-          when={props.screen === "workspace"}
-          fallback={null}
-        >
-          <span class="muted">{conversationTitle()}</span>
-          <span class="sep">/</span>
-          <span>{documentTitle()}</span>
-        </Show>
-      </div>
+      />
       <div class="tb-right tb-no-drag">
         <div class="theme-switch">
           <For each={["a", "b", "c"] as ThemeVariant[]}>
@@ -203,14 +184,6 @@ export function TitleBar(props: TitleBarProps) {
             )}
           </For>
         </div>
-        <button
-          type="button"
-          class="tb-ibtn"
-          title="会话列表"
-          onClick={props.onOpenConversations}
-        >
-          <Icon name="search" />
-        </button>
         <button type="button" class="tb-ibtn" title="设置" onClick={props.onOpenSettings}>
           <Icon name="settings" />
         </button>

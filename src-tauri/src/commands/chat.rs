@@ -23,8 +23,8 @@ use sqlx::{Pool, Sqlite};
 
 use super::chat_tools::{
     append_tool_results, build_all_tools, build_messages, emit_text_response, execute_tool,
-    parse_ask_user_args, stream_response, update_system_prompt, AskUserRequest, ToolContext,
-    MAX_TOOL_ROUNDS,
+    extract_http_urls, parse_ask_user_args, stream_response, update_system_prompt, AskUserRequest,
+    ToolContext, MAX_TOOL_ROUNDS,
 };
 use super::files::{grant_directory_access, prepare_directory_context};
 use super::trace::{preview, Tracer};
@@ -165,6 +165,14 @@ pub struct SendMessageRequest {
     pub forced_mode: Option<String>,
     #[serde(default)]
     pub forced_label: Option<String>,
+    /// Current producing task context, used only if the backend must classify
+    /// because no forced_mode was supplied.
+    #[serde(default)]
+    pub current_mode: Option<String>,
+    #[serde(default)]
+    pub current_task_label: Option<String>,
+    #[serde(default)]
+    pub has_active_document: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -218,7 +226,11 @@ pub async fn classify_agent_mode(
         .get_fast_provider()
         .await
         .map_err(|e| e.to_string())?;
-    Ok(agent_classifier::classify_agent_mode(fast.as_ref(), &ctx).await)
+    let primary = engine.get_provider().await.map_err(|e| e.to_string())?;
+    Ok(
+        agent_classifier::classify_agent_mode_with_retry(fast.as_ref(), primary.as_ref(), &ctx)
+            .await,
+    )
 }
 
 #[tauri::command]
@@ -338,6 +350,9 @@ pub async fn generate_followup_prompts(
 fn build_classify_context(
     content: &str,
     context_refs: Option<&Vec<ContextRef>>,
+    current_mode: Option<String>,
+    current_task_label: Option<String>,
+    has_active_document: bool,
 ) -> ClassifyContext {
     let refs = context_refs.cloned().unwrap_or_default();
     let has_directory_ref =
@@ -353,11 +368,9 @@ fn build_classify_context(
         has_directory_ref,
         has_file_ref,
         directory_aliases,
-        // send_message's own classify is a fallback (the client normally passes
-        // forced_mode) and has no committed-task context, so action stays continue.
-        current_mode: None,
-        current_task_label: None,
-        has_active_document: false,
+        current_mode,
+        current_task_label,
+        has_active_document,
     }
 }
 
@@ -461,6 +474,7 @@ pub async fn send_message(
 
     let mut active_skill: Option<crate::skills::loader::SkillMetadata> = None;
     let mut workspace_root_ids: Vec<String> = Vec::new();
+    let allowed_urls = extract_http_urls(&req.content);
 
     let mut user_content = req.content.clone();
     if let Some(ref attachments) = req.attachments {
@@ -568,7 +582,13 @@ pub async fn send_message(
         }
     }
 
-    let mut classify_ctx = build_classify_context(&req.content, req.context_refs.as_ref());
+    let mut classify_ctx = build_classify_context(
+        &req.content,
+        req.context_refs.as_ref(),
+        req.current_mode.clone(),
+        req.current_task_label.clone(),
+        req.has_active_document.unwrap_or(false),
+    );
     if inherited_workspace {
         classify_ctx.has_directory_ref = true;
     }
@@ -611,7 +631,12 @@ pub async fn send_message(
             .get_fast_provider()
             .await
             .map_err(|e| turn_fail(&tracer, "fast_provider", e.to_string()))?;
-        agent_classifier::classify_agent_mode(fast.as_ref(), &classify_ctx).await
+        agent_classifier::classify_agent_mode_with_retry(
+            fast.as_ref(),
+            provider.as_ref(),
+            &classify_ctx,
+        )
+        .await
     };
     let mode = classification.mode;
     let evidence_mode = classification.mode == AgentMode::Evidence;
@@ -651,8 +676,10 @@ pub async fn send_message(
     // the mapping section only promises tools that exist this turn.
     let retrieval_tool_names: Vec<String> = tools
         .iter()
+        .filter(|t| {
+            crate::skills::router::is_retrieval_tool(&t.function.name, &t.function.description)
+        })
         .map(|t| t.function.name.clone())
-        .filter(|n| crate::skills::router::is_retrieval_tool_name(n))
         .collect();
 
     let history_count = history.len();
@@ -725,6 +752,7 @@ pub async fn send_message(
         conversation_id: &conversation_id,
         message_id: &message_id,
         workspace_root_ids: &workspace_root_ids,
+        allowed_urls: &allowed_urls,
     };
 
     let mut full_response = String::new();
@@ -923,6 +951,7 @@ pub async fn send_message(
                     MAX_LEAK_RETRIES,
                     assistant_msg.content.chars().take(120).collect::<String>()
                 );
+                emit_stream_status(&app, &conversation_id, &message_id, "thinking");
                 continue;
             }
             leak_fallback = true;
@@ -1048,6 +1077,7 @@ pub async fn send_message(
                     leak_retries,
                     MAX_LEAK_RETRIES
                 );
+                emit_stream_status(&app, &conversation_id, &message_id, "thinking");
                 continue;
             }
             leak_fallback = true;
@@ -1675,10 +1705,56 @@ fn clean_title(raw: &str) -> String {
         .to_string();
     title
         .chars()
-        .take(24)
+        .take(30)
         .collect::<String>()
         .trim()
         .to_string()
+}
+
+/// Persisted source for a conversation title. `Manual` survives subsequent
+/// `maybe_auto_title` calls so the auto-titler never clobbers a title the
+/// user picked. `Auto` (or unset) means the auto-titler may keep updating it
+/// after each turn until the user manually edits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TitleSource {
+    Auto,
+    Manual,
+}
+
+impl TitleSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            TitleSource::Auto => "auto",
+            TitleSource::Manual => "manual",
+        }
+    }
+}
+
+/// True when the conversation record says the title was set by the user and
+/// the auto-titler must leave it alone. Tolerant of malformed JSON.
+fn is_title_manually_set(settings_json: Option<&str>) -> bool {
+    let Some(raw) = settings_json else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return false;
+    };
+    matches!(
+        value.get("title_source").and_then(|s| s.as_str()),
+        Some(s) if s == TitleSource::Manual.as_str()
+    )
+}
+
+fn build_title_settings_json(existing: Option<&str>, source: TitleSource) -> String {
+    let mut obj: serde_json::Map<String, serde_json::Value> = existing
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    obj.insert(
+        "title_source".into(),
+        serde_json::Value::String(source.as_str().to_string()),
+    );
+    serde_json::Value::Object(obj).to_string()
 }
 
 async fn maybe_auto_title(
@@ -1686,88 +1762,105 @@ async fn maybe_auto_title(
     provider: &dyn crate::llm::provider::LlmProvider,
     conversation_id: &str,
 ) {
-    if let Ok(Some(conv)) = db::queries::get_conversation(pool, conversation_id).await {
-        if conv.title != "新会话" {
+    let Some(conv) = (match db::queries::get_conversation(pool, conversation_id).await {
+        Ok(conv) => conv,
+        Err(e) => {
+            log::warn!("Failed to load conversation for auto title: {}", e);
             return;
         }
+    }) else {
+        return;
+    };
 
-        let rows = match db::queries::list_messages(pool, conversation_id).await {
-            Ok(rows) => rows,
-            Err(e) => {
-                log::warn!("Failed to load messages for auto title: {}", e);
-                return;
-            }
-        };
+    // Manual titles win forever — the user owns the row once they touch it.
+    if is_title_manually_set(conv.settings_json.as_deref()) {
+        return;
+    }
 
-        let snippets = rows
-            .iter()
-            .filter(|msg| {
-                (msg.role == "user" || msg.role == "assistant") && !message_is_hidden(msg)
-            })
-            .take(8)
-            .map(|msg| {
-                let role = if msg.role == "user" {
-                    "用户"
-                } else {
-                    "助手"
-                };
-                let content = preview(&msg.content.replace('\n', " "), 260);
-                format!("{}：{}", role, content)
-            })
-            .collect::<Vec<_>>();
-
-        if snippets.is_empty() {
+    let rows = match db::queries::list_messages(pool, conversation_id).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            log::warn!("Failed to load messages for auto title: {}", e);
             return;
         }
+    };
 
-        let request = ChatRequest {
-            model: provider.model_name().to_string(),
-            messages: vec![
-                ChatMessage {
-                    reasoning_content: None,
-                    role: "system".into(),
-                    content: "你是法律 AI 桌面应用的会话标题生成器。请根据聊天内容归纳一个简洁中文标题，6 到 16 个汉字为宜，只输出标题，不要解释，不要加引号。".into(),
-                    name: None,
-                    tool_calls: None,
-                    tool_call_id: None,
-                },
-                ChatMessage {
-                    reasoning_content: None,
-                    role: "user".into(),
-                    content: format!("聊天内容：\n{}", snippets.join("\n")),
-                    name: None,
-                    tool_calls: None,
-                    tool_call_id: None,
-                },
-            ],
-            tools: None,
-            temperature: Some(0.1),
-            max_tokens: Some(48),
-            stream: false,
-        };
+    let snippets = rows
+        .iter()
+        .filter(|msg| {
+            (msg.role == "user" || msg.role == "assistant") && !message_is_hidden(msg)
+        })
+        .take(8)
+        .map(|msg| {
+            let role = if msg.role == "user" {
+                "用户"
+            } else {
+                "助手"
+            };
+            let content = preview(&msg.content.replace('\n', " "), 260);
+            format!("{}：{}", role, content)
+        })
+        .collect::<Vec<_>>();
 
-        let response = match provider.chat(&request).await {
-            Ok(response) => response,
-            Err(e) => {
-                log::warn!("Failed to generate conversation title: {}", e);
-                return;
-            }
-        };
+    if snippets.is_empty() {
+        return;
+    }
 
-        let title = response
-            .choices
-            .first()
-            .and_then(|choice| choice.message.as_ref())
-            .map(|message| clean_title(&message.content))
-            .unwrap_or_default();
+    let request = ChatRequest {
+        model: provider.model_name().to_string(),
+        messages: vec![
+            ChatMessage {
+                reasoning_content: None,
+                role: "system".into(),
+                content: "你是法律 AI 桌面应用的会话标题生成器。请根据聊天内容归纳一个简洁中文标题，8 到 24 个汉字为宜，最多 30 字，只输出标题，不要解释，不要加引号。".into(),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            ChatMessage {
+                reasoning_content: None,
+                role: "user".into(),
+                content: format!("聊天内容：\n{}", snippets.join("\n")),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+            },
+        ],
+        tools: None,
+        temperature: Some(0.1),
+        max_tokens: Some(48),
+        stream: false,
+    };
 
-        if !title.is_empty() {
-            if let Err(e) =
-                db::queries::update_conversation_title(pool, conversation_id, &title).await
-            {
-                log::warn!("Failed to update generated conversation title: {}", e);
-            }
+    let response = match provider.chat(&request).await {
+        Ok(response) => response,
+        Err(e) => {
+            log::warn!("Failed to generate conversation title: {}", e);
+            return;
         }
+    };
+
+    let title = response
+        .choices
+        .first()
+        .and_then(|choice| choice.message.as_ref())
+        .map(|message| clean_title(&message.content))
+        .unwrap_or_default();
+
+    if title.is_empty() || title == conv.title {
+        return;
+    }
+
+    let settings_json = build_title_settings_json(conv.settings_json.as_deref(), TitleSource::Auto);
+    if let Err(e) = db::queries::update_conversation_title_and_source(
+        pool,
+        conversation_id,
+        &title,
+        &settings_json,
+    )
+    .await
+    {
+        log::warn!("Failed to update generated conversation title: {}", e);
     }
 }
 
@@ -1829,9 +1922,22 @@ pub async fn update_conversation_title(
     conversation_id: String,
     title: String,
 ) -> Result<(), String> {
-    db::queries::update_conversation_title(&db, &conversation_id, &title)
+    // Frontend invokes this command only for manual renames, so any call here
+    // is by definition the user setting the title — lock it from auto-titling
+    // by stamping title_source=manual into settings_json.
+    let existing = db::queries::get_conversation(&db, &conversation_id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?
+        .and_then(|c| c.settings_json);
+    let settings_json = build_title_settings_json(existing.as_deref(), TitleSource::Manual);
+    db::queries::update_conversation_title_and_source(
+        &db,
+        &conversation_id,
+        &title,
+        &settings_json,
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -1854,5 +1960,41 @@ mod tests {
         let text = format!("root_id={} root_id={} root_id=abc123", hash, hash);
         assert_eq!(extract_workspace_root_ids(&text), vec![hash]);
         assert!(extract_workspace_root_ids("无引用内容").is_empty());
+    }
+
+    #[test]
+    fn clean_title_truncates_long_inputs_to_30_chars() {
+        // 40-char string must be hard-truncated at 30 chars.
+        let long = "测".repeat(40);
+        let out = clean_title(&long);
+        assert_eq!(out.chars().count(), 30);
+    }
+
+    #[test]
+    fn clean_title_strips_label_prefixes_and_quotes() {
+        let cases = [
+            ("会话标题：股权转让协议起草", "股权转让协议起草"),
+            ("标题：房屋租赁合同", "房屋租赁合同"),
+            ("标题:某案件分析", "某案件分析"),
+            ("\"起诉状模板\"", "起诉状模板"),
+            ("  《律师函》  ", "律师函"),
+        ];
+        for (raw, expected) in cases {
+            assert_eq!(clean_title(raw), expected, "input: {raw}");
+        }
+    }
+
+    #[test]
+    fn clean_title_keeps_short_inputs_intact() {
+        assert_eq!(clean_title("合同审查"), "合同审查");
+        assert_eq!(clean_title(""), "");
+    }
+
+    #[test]
+    fn conversation_settings_reports_manual_title_lock() {
+        assert!(is_title_manually_set(Some(r#"{"title_source":"manual"}"#)));
+        assert!(!is_title_manually_set(Some(r#"{"title_source":"auto"}"#)));
+        assert!(!is_title_manually_set(Some(r#"{"other":"value"}"#)));
+        assert!(!is_title_manually_set(None));
     }
 }
