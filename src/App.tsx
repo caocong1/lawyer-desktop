@@ -103,7 +103,6 @@ export default function App() {
             <div class="screen anim">
               <HomePage
                 onStart={(p) => void start(p)}
-                onOpenConversations={() => setConversationListOpen(true)}
                 onToast={showToast}
               />
             </div>

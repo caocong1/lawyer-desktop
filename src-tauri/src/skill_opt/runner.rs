@@ -11,6 +11,7 @@ use crate::llm::types::{ChatMessage, ChatRequest, ToolCall};
 use crate::mcp::manager::McpManager;
 use crate::security::eval_sandbox::EvalPathSandbox;
 use crate::security::path_sandbox::PathSandbox;
+use crate::skills::agent_classifier::AgentMode;
 use crate::skills::loader::{load_research_gate, SkillMetadata};
 use crate::skills::SkillRegistry;
 use sqlx::{Pool, Sqlite};
@@ -47,7 +48,13 @@ pub async fn run_turn_core(
     let research_gate_ref = research_gate.as_deref();
 
     let mut active_skill = skill_override;
-    let tools = build_all_tools(mcp, true).await;
+    // The eval runner only replays drafting/evidence skills, never Q&A.
+    let mode = if evidence_mode {
+        AgentMode::Evidence
+    } else {
+        AgentMode::Draft
+    };
+    let tools = build_all_tools(mcp, mode, true).await;
     let retrieval_tool_names: Vec<String> = tools
         .iter()
         .filter(|t| {
@@ -61,15 +68,14 @@ pub async fn run_turn_core(
         &all_skills,
         research_gate_ref,
         active_skill.as_ref(),
-        evidence_mode,
+        mode,
         &retrieval_tool_names,
         vec![],
         user_content.to_string(),
     );
 
     // Combined sandbox: eval roots + skills root parent for output paths
-    let mut sandbox_roots: Vec<std::path::PathBuf> =
-        eval_sandbox.allowed_roots().to_vec();
+    let mut sandbox_roots: Vec<std::path::PathBuf> = eval_sandbox.allowed_roots().to_vec();
     if let Some(sr) = skills.get_skills_root().await {
         if let Some(parent) = sr.parent() {
             sandbox_roots.push(parent.to_path_buf());
@@ -87,6 +93,7 @@ pub async fn run_turn_core(
         conversation_id: "eval",
         message_id: &eval_id,
         workspace_root_ids: &[],
+        allowed_urls: &[],
     };
 
     let mut turn_retrievals: Vec<(String, String)> = Vec::new();
@@ -133,7 +140,7 @@ pub async fn run_turn_core(
                         &all_skills,
                         research_gate_ref,
                         active_skill.as_ref(),
-                        evidence_mode,
+                        mode,
                         &retrieval_tool_names,
                     );
                 }
@@ -206,7 +213,10 @@ async fn run_headless_tools(
         }
         results.push((tc.id.clone(), text));
     }
-    HeadlessBatch { results, retrievals }
+    HeadlessBatch {
+        results,
+        retrievals,
+    }
 }
 
 fn append_tool_results(
@@ -227,7 +237,10 @@ fn append_tool_results(
     }
 }
 
-pub fn build_eval_user_content(case: &EvalCaseRow, eval_sandbox: &EvalPathSandbox) -> anyhow::Result<String> {
+pub fn build_eval_user_content(
+    case: &EvalCaseRow,
+    eval_sandbox: &EvalPathSandbox,
+) -> anyhow::Result<String> {
     let mut content = case.prompt.clone();
     if let Some(ref materials) = case.materials_path {
         let validated = eval_sandbox.validate(materials)?;

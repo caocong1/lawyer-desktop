@@ -79,6 +79,9 @@ button { font-family: inherit; }
   background: var(--surface); border: 1px solid var(--line); border-radius: 18px;
   padding: 18px 20px; box-shadow: var(--shadow-pop); margin-bottom: 40px;
 }
+.starter.drag-active { position: relative; border-color: var(--accent); border-style: dashed; background: var(--accent-soft); }
+.starter .drop-overlay { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; border-radius: 18px; background: color-mix(in srgb, var(--accent-soft) 92%, transparent); color: var(--accent); font-family: var(--serif); font-size: 14px; pointer-events: none; }
+.starter .drop-overlay svg { width: 24px; height: 24px; }
 .starter-top { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .starter-top .seal { width: 28px; height: 28px; font-size: 16px; }
 .starter-top .t { font-family: var(--serif); font-weight: 600; font-size: 15px; }
@@ -137,7 +140,7 @@ button { font-family: inherit; }
 .msg { margin-bottom: 22px; animation: msg-in .35s ease; }
 @keyframes msg-in { from { transform: translateY(8px); } to { transform: none; } }
 .msg-user { display: flex; justify-content: flex-end; }
-.bubble-user { max-width: 86%; background: var(--user-bg); color: var(--user-text); border: 1px solid var(--user-border); border-radius: var(--user-round); padding: 12px 16px; font-size: 13.5px; line-height: 1.7; }
+.bubble-user { max-width: 86%; background: var(--user-bg); color: var(--user-text); border: 1px solid var(--user-border); border-radius: var(--user-round); padding: 12px 16px; font-size: 13.5px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
 .msg-agent { display: flex; gap: 12px; }
 .ava { flex: 0 0 30px; height: 30px; border-radius: var(--seal-radius); margin-top: 2px; background: var(--seal-bg); color: var(--seal-text); font-family: var(--serif); font-weight: 700; font-size: 15px; display: grid; place-items: center; box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); }
 .agent-body { flex: 1; min-width: 0; }
@@ -192,6 +195,9 @@ button { font-family: inherit; }
 .composer { flex: 0 0 auto; padding: 14px 22px 18px; border-top: 1px solid var(--line); }
 .input-box { border: 1px solid var(--line); border-radius: 13px; background: var(--surface); padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; transition: .15s; }
 .input-box:focus-within { border-color: var(--accent); }
+.input-box.drag-active { position: relative; border-color: var(--accent); border-style: dashed; background: var(--accent-soft); }
+.input-box .drop-overlay { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; border-radius: 13px; background: color-mix(in srgb, var(--accent-soft) 92%, transparent); color: var(--accent); font-family: var(--serif); font-size: 13px; pointer-events: none; }
+.input-box .drop-overlay svg { width: 22px; height: 22px; }
 .input-box textarea { border: none; outline: none; resize: none; background: transparent; font-family: var(--serif); font-size: 13.5px; line-height: 1.6; color: var(--ink); width: 100%; min-height: 22px; max-height: 120px; }
 .input-box textarea::placeholder { color: var(--muted); }
 .input-row { display: flex; align-items: center; gap: 12px; }
@@ -203,8 +209,23 @@ button { font-family: inherit; }
 .send-btn:disabled { opacity: .45; cursor: default; }
 .send-btn svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 1.8; }
 
+/* shared "Ctrl+Enter 发送" hint next to send buttons */
+.send-hint { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--muted); white-space: nowrap; user-select: none; }
+.send-hint kbd {
+  font-family: var(--mono); font-size: 10px; line-height: 1; color: var(--muted);
+  padding: 2px 5px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px;
+  background: var(--surface);
+}
+
 /* ===================== 右：文书预览 ===================== */
 .doc { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--doc-canvas); position: relative; }
+.ws-splitter { flex: 0 0 6px; margin: 0 -3px; position: relative; z-index: 5; cursor: col-resize; background: transparent; touch-action: none; }
+.ws-splitter::after { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; transform: translateX(-50%); background: transparent; transition: background .15s; }
+.ws-splitter:hover::after, .ws.ws-resizing .ws-splitter::after { background: var(--accent); }
+.ws.ws-resizing { cursor: col-resize; }
+.ws.ws-resizing * { user-select: none; }
+.ws.solo .chat { flex: 1 1 auto; border-right: none; }
+.ws.solo .thread > *, .ws.solo .composer > * { max-width: var(--solo-col, 760px); margin-inline: auto; }
 .doc-tb { flex: 0 0 auto; height: 54px; display: flex; align-items: center; gap: 12px; padding: 0 24px; border-bottom: 1px solid var(--line); background: var(--app-bg); }
 .doc-title { font-family: var(--serif); font-weight: 600; font-size: 14.5px; color: var(--ink); }
 .ver-pill { font-size: 11px; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 6px; padding: 2px 8px; font-family: var(--mono); white-space: nowrap; }

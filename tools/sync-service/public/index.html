@@ -1,0 +1,981 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>墨律 Inkstatute｜中国律师的 AI 桌面助手</title>
+  <meta
+    name="description"
+    content="墨律 Inkstatute 是面向中国律师的本地优先 AI 桌面助手，支持法律检索、文书起草、引用核验、DOCX 导出与反馈闭环。"
+  />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@500;600;700;900&display=swap"
+    rel="stylesheet"
+  />
+  <style>
+    :root {
+      --ivory: #f5efe3;
+      --paper: #fffaf1;
+      --paper-2: #efe4d2;
+      --ink: #151414;
+      --ink-soft: #4f4940;
+      --muted: #8d8170;
+      --line: rgba(43, 36, 27, 0.14);
+      --line-strong: rgba(43, 36, 27, 0.24);
+      --oxblood: #762a2a;
+      --oxblood-2: #9d3f34;
+      --gold: #b8944d;
+      --green: #1e6b44;
+      --night: #151515;
+      --night-2: #24201b;
+      --white: #fffdf8;
+      --shadow: 0 24px 70px -36px rgba(40, 28, 16, 0.62);
+      --sans: "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+      --serif: "Noto Serif SC", Georgia, serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: var(--sans);
+      color: var(--ink);
+      background:
+        linear-gradient(90deg, rgba(118,42,42,0.05) 1px, transparent 1px),
+        linear-gradient(rgba(118,42,42,0.04) 1px, transparent 1px),
+        var(--ivory);
+      background-size: 72px 72px, 72px 72px, auto;
+      overflow-x: hidden;
+    }
+
+    a { color: inherit; text-decoration: none; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+
+    .site {
+      position: relative;
+      min-height: 100vh;
+      isolation: isolate;
+    }
+
+    .site::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: -1;
+      background:
+        linear-gradient(115deg, rgba(21,20,20,0.08), transparent 36%),
+        linear-gradient(180deg, transparent 66%, rgba(118,42,42,0.08));
+      mask-image: linear-gradient(180deg, #000 0%, transparent 88%);
+    }
+
+    .nav {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 16px clamp(20px, 4vw, 64px);
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      background: color-mix(in srgb, var(--night) 88%, transparent);
+      color: #f5ecdd;
+      backdrop-filter: blur(18px);
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      min-width: max-content;
+    }
+
+    .seal {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      background: linear-gradient(145deg, var(--oxblood), #421616);
+      color: #f7dfbf;
+      font-family: var(--serif);
+      font-size: 19px;
+      font-weight: 900;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.15), 0 12px 28px -18px #000;
+    }
+
+    .brand-word {
+      display: grid;
+      gap: 1px;
+      font-family: var(--serif);
+      font-weight: 700;
+      font-size: 18px;
+    }
+
+    .brand-word small {
+      font-family: var(--sans);
+      font-size: 10px;
+      color: #b9ad99;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: clamp(12px, 2.4vw, 28px);
+      font-size: 13px;
+      color: #d5c9b8;
+    }
+
+    .nav-links a:hover { color: #fff7ea; }
+
+    .nav-download {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 38px;
+      padding: 0 16px;
+      border-radius: 8px;
+      background: #f5ead7;
+      color: #241914;
+      font-weight: 700;
+      white-space: nowrap;
+      box-shadow: 0 16px 38px -26px #fff;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.02fr) minmax(380px, 0.98fr);
+      gap: clamp(28px, 5vw, 76px);
+      align-items: center;
+      max-width: 1380px;
+      margin: 0 auto;
+      padding: clamp(52px, 7vw, 92px) clamp(20px, 4vw, 64px) 48px;
+    }
+
+    .hero-copy {
+      min-width: 0;
+      animation: rise 0.7s ease both;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 32px;
+      padding: 0 12px;
+      border: 1px solid rgba(118,42,42,0.18);
+      border-radius: 999px;
+      color: var(--oxblood);
+      background: rgba(255,250,241,0.68);
+      font-size: 12px;
+      font-weight: 700;
+      box-shadow: 0 14px 46px -36px rgba(118,42,42,0.6);
+    }
+
+    .eyebrow::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 5px rgba(30,107,68,0.13);
+    }
+
+    h1 {
+      margin: 26px 0 18px;
+      font-family: var(--serif);
+      font-size: clamp(46px, 7.6vw, 112px);
+      line-height: 0.94;
+      letter-spacing: 0;
+      color: var(--ink);
+    }
+
+    h1 span {
+      display: block;
+      color: var(--oxblood);
+    }
+
+    .hero-lede {
+      max-width: 700px;
+      margin: 0 0 30px;
+      color: var(--ink-soft);
+      font-size: clamp(16px, 1.6vw, 20px);
+      line-height: 1.88;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-bottom: 28px;
+    }
+
+    .primary-cta,
+    .secondary-cta {
+      min-height: 50px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      border-radius: 8px;
+      padding: 0 22px;
+      border: 1px solid transparent;
+      font-size: 15px;
+      font-weight: 800;
+      transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+      white-space: nowrap;
+    }
+
+    .primary-cta {
+      background: linear-gradient(135deg, var(--oxblood), var(--oxblood-2));
+      color: #fff7e7;
+      box-shadow: 0 26px 60px -30px rgba(118,42,42,0.9);
+    }
+
+    .primary-cta[aria-disabled="true"] {
+      pointer-events: none;
+      background: #b7ab9b;
+      box-shadow: none;
+    }
+
+    .secondary-cta {
+      background: rgba(255,250,241,0.78);
+      color: var(--ink);
+      border-color: var(--line-strong);
+    }
+
+    .primary-cta:hover,
+    .secondary-cta:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 24px 56px -32px rgba(20, 16, 12, 0.8);
+    }
+
+    .arrow {
+      width: 18px;
+      height: 18px;
+      display: inline-grid;
+      place-items: center;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.18);
+    }
+
+    .signal-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      color: var(--ink-soft);
+      font-size: 12px;
+    }
+
+    .signal-row span {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 28px;
+      padding: 0 10px;
+      border: 1px solid rgba(21,20,20,0.1);
+      border-radius: 999px;
+      background: rgba(255,255,255,0.34);
+    }
+
+    .signal-row span::before {
+      content: "";
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--gold);
+    }
+
+    .hero-visual {
+      position: relative;
+      min-width: 0;
+      animation: rise 0.8s 0.08s ease both;
+    }
+
+    .device-frame {
+      position: relative;
+      overflow: hidden;
+      border-radius: 20px;
+      border: 1px solid rgba(21,20,20,0.16);
+      background: linear-gradient(145deg, #1b1917, #302b25);
+      box-shadow: var(--shadow), inset 0 0 0 1px rgba(255,255,255,0.08);
+      aspect-ratio: 1.28;
+      padding: 18px;
+    }
+
+    .device-frame::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(115deg, transparent 25%, rgba(255,255,255,0.12), transparent 42%);
+      transform: translateX(-70%);
+      animation: sheen 6.5s ease-in-out infinite;
+    }
+
+    .product-shot {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      border-radius: 13px;
+      filter: saturate(1.02) contrast(1.04);
+      opacity: 0.94;
+    }
+
+    .preview-layer {
+      position: absolute;
+      right: -22px;
+      bottom: -24px;
+      width: min(320px, 52%);
+      padding: 16px;
+      border: 1px solid rgba(255,255,255,0.22);
+      border-radius: 16px;
+      background: rgba(255,250,241,0.84);
+      backdrop-filter: blur(16px);
+      box-shadow: 0 30px 70px -34px rgba(0,0,0,0.62);
+      animation: floatDoc 4.6s ease-in-out infinite;
+    }
+
+    .preview-title {
+      display: flex;
+      justify-content: space-between;
+      color: var(--oxblood);
+      font-family: var(--serif);
+      font-weight: 700;
+      font-size: 13px;
+      margin-bottom: 12px;
+    }
+
+    .doc-lines {
+      display: grid;
+      gap: 8px;
+    }
+
+    .doc-lines i {
+      display: block;
+      height: 8px;
+      border-radius: 99px;
+      background: linear-gradient(90deg, rgba(118,42,42,0.24), rgba(184,148,77,0.16), rgba(21,20,20,0.12));
+      background-size: 190% 100%;
+      animation: lineFlow 3s ease-in-out infinite;
+    }
+
+    .doc-lines i:nth-child(2) { width: 84%; animation-delay: 0.25s; }
+    .doc-lines i:nth-child(3) { width: 68%; animation-delay: 0.5s; }
+    .doc-lines i:nth-child(4) { width: 92%; animation-delay: 0.75s; }
+
+    .download-section {
+      max-width: 1240px;
+      margin: 20px auto 0;
+      padding: 0 clamp(20px, 4vw, 64px) 70px;
+    }
+
+    .download-panel {
+      display: grid;
+      grid-template-columns: minmax(260px, 0.9fr) minmax(0, 1.1fr);
+      gap: 22px;
+      border: 1px solid rgba(21,20,20,0.12);
+      border-radius: 18px;
+      background: rgba(255,250,241,0.82);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+      overflow: hidden;
+    }
+
+    .release-card {
+      padding: 28px;
+      background:
+        linear-gradient(135deg, rgba(21,20,20,0.96), rgba(45,38,30,0.96)),
+        var(--night);
+      color: #f6ead8;
+    }
+
+    .release-card h2,
+    .section-title h2 {
+      margin: 0;
+      font-family: var(--serif);
+      font-size: clamp(26px, 3vw, 42px);
+      line-height: 1.15;
+      letter-spacing: 0;
+    }
+
+    .release-meta {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 26px;
+    }
+
+    .meta-item {
+      min-height: 76px;
+      padding: 13px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: rgba(255,255,255,0.05);
+    }
+
+    .meta-item b {
+      display: block;
+      margin-bottom: 5px;
+      color: #fff7ea;
+      font-size: 18px;
+      font-family: var(--serif);
+    }
+
+    .meta-item span {
+      color: #b9ad9b;
+      font-size: 12px;
+      word-break: break-word;
+    }
+
+    .platforms {
+      padding: 24px;
+    }
+
+    .platform-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+
+    .detected {
+      min-height: 30px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 11px;
+      border-radius: 999px;
+      background: rgba(30,107,68,0.1);
+      color: var(--green);
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .platform-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .platform-card {
+      min-height: 164px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px;
+      border-radius: 13px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.52);
+      transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+    }
+
+    .platform-card.recommended {
+      border-color: rgba(118,42,42,0.42);
+      background: #fffdf8;
+      box-shadow: 0 18px 46px -36px rgba(118,42,42,0.8);
+    }
+
+    .platform-card:hover {
+      transform: translateY(-3px);
+      border-color: rgba(118,42,42,0.38);
+    }
+
+    .platform-name {
+      font-family: var(--serif);
+      font-size: 20px;
+      font-weight: 800;
+    }
+
+    .platform-sub {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 4px;
+    }
+
+    .platform-card a {
+      min-height: 38px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+      background: var(--ink);
+      color: #fff7ea;
+      font-weight: 800;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .platform-card a.disabled {
+      pointer-events: none;
+      background: #bbb1a5;
+      color: #fffaf1;
+    }
+
+    .features {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 0 clamp(20px, 4vw, 64px) 74px;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 22px;
+      margin-bottom: 22px;
+    }
+
+    .section-title p {
+      max-width: 520px;
+      margin: 0;
+      color: var(--ink-soft);
+      line-height: 1.8;
+    }
+
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .feature {
+      min-height: 176px;
+      padding: 20px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: rgba(255,250,241,0.68);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .feature::after {
+      content: "";
+      position: absolute;
+      left: 20px;
+      right: 20px;
+      bottom: 18px;
+      height: 2px;
+      background: linear-gradient(90deg, var(--oxblood), var(--gold), transparent);
+      transform: scaleX(0.28);
+      transform-origin: left;
+      transition: transform 0.24s ease;
+    }
+
+    .feature:hover::after { transform: scaleX(1); }
+
+    .feature b {
+      display: block;
+      margin-bottom: 10px;
+      font-family: var(--serif);
+      font-size: 18px;
+    }
+
+    .feature p {
+      margin: 0;
+      color: var(--ink-soft);
+      line-height: 1.72;
+      font-size: 13px;
+    }
+
+    .ops {
+      color: #f5ead7;
+      background:
+        linear-gradient(135deg, rgba(118,42,42,0.86), rgba(21,20,20,0.96)),
+        var(--night);
+    }
+
+    .ops-inner {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 48px clamp(20px, 4vw, 64px);
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 28px;
+      align-items: center;
+    }
+
+    .ops h2 {
+      margin: 0 0 10px;
+      font-family: var(--serif);
+      font-size: clamp(26px, 3vw, 42px);
+    }
+
+    .ops p {
+      margin: 0;
+      color: #cdbfaa;
+      line-height: 1.8;
+    }
+
+    .ops-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+
+    .ops-actions a {
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 16px;
+      border: 1px solid rgba(255,255,255,0.16);
+      border-radius: 8px;
+      color: #fff7ea;
+      background: rgba(255,255,255,0.08);
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      flex-wrap: wrap;
+      padding: 24px clamp(20px, 4vw, 64px);
+      color: var(--muted);
+      font-size: 12px;
+      background: #fff8ec;
+      border-top: 1px solid var(--line);
+    }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(18px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes sheen {
+      0%, 42% { transform: translateX(-75%); }
+      62%, 100% { transform: translateX(80%); }
+    }
+
+    @keyframes floatDoc {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-10px); }
+    }
+
+    @keyframes lineFlow {
+      0%, 100% { background-position: 0 0; }
+      50% { background-position: 100% 0; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+      }
+    }
+
+    @media (max-width: 980px) {
+      .nav { align-items: flex-start; }
+      .nav-links { display: none; }
+      .hero {
+        grid-template-columns: 1fr;
+        padding-top: 42px;
+      }
+      .hero-visual { order: -1; }
+      .download-panel,
+      .ops-inner {
+        grid-template-columns: 1fr;
+      }
+      .ops-actions { justify-content: flex-start; }
+      .feature-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 660px) {
+      .nav { padding: 13px 18px; }
+      .brand-word small { display: none; }
+      .nav-download { display: none; }
+      .hero {
+        width: 100vw;
+        max-width: 100vw;
+        margin: 0;
+        overflow: hidden;
+        padding-inline: 18px;
+      }
+      .hero-copy,
+      .hero-visual {
+        width: calc(100vw - 36px);
+        inline-size: calc(100vw - 36px);
+        max-width: calc(100vw - 36px);
+      }
+      .hero-lede {
+        width: min(300px, 100%);
+        inline-size: min(300px, 100%);
+        max-width: 300px;
+        word-break: break-all;
+        overflow-wrap: anywhere;
+      }
+      h1 { font-size: clamp(38px, 12.2vw, 52px); }
+      .signal-row {
+        display: grid;
+        grid-template-columns: 1fr;
+      }
+      .signal-row span {
+        width: fit-content;
+        max-width: 100%;
+      }
+      .primary-cta,
+      .secondary-cta {
+        width: 100%;
+      }
+      .device-frame { padding: 10px; border-radius: 16px; }
+      .preview-layer { position: relative; right: auto; bottom: auto; width: 100%; margin-top: 12px; }
+      .platform-grid,
+      .feature-grid,
+      .release-meta {
+        grid-template-columns: 1fr;
+      }
+      .section-title { align-items: flex-start; flex-direction: column; }
+      footer { padding-inline: 18px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="site">
+    <header class="nav">
+      <a class="brand" href="/" aria-label="墨律 Inkstatute">
+        <span class="seal">墨</span>
+        <span class="brand-word">墨律<small>Inkstatute</small></span>
+      </a>
+      <nav class="nav-links" aria-label="主导航">
+        <a href="#product">产品</a>
+        <a href="#download">更新</a>
+        <a href="#security">安全</a>
+        <a href="/admin">反馈运营</a>
+      </nav>
+      <a class="nav-download" href="#download">下载</a>
+    </header>
+
+    <main>
+      <section class="hero" id="product">
+        <div class="hero-copy">
+          <span class="eyebrow" id="health-label">同步服务检查中</span>
+          <h1>墨律 <span>Inkstatute</span></h1>
+          <p class="hero-lede">
+            为中国律师准备的本地优先 AI 桌面助手。把法律检索、文书起草、引用核验、DOCX 导出和律师反馈闭环放进一个克制、高效的工作台。
+          </p>
+          <div class="actions">
+            <a class="primary-cta" id="primary-download" href="#download" aria-disabled="true">
+              <span id="primary-download-label">检查安装包</span>
+              <span class="arrow">↓</span>
+            </a>
+            <a class="secondary-cta" href="#download">查看全部平台</a>
+          </div>
+          <div class="signal-row">
+            <span>本地资料沙箱</span>
+            <span>法规与案例引用核验</span>
+            <span>stable / beta 更新通道</span>
+          </div>
+        </div>
+
+        <div class="hero-visual" aria-label="墨律桌面应用预览">
+          <div class="device-frame">
+            <img class="product-shot" src="/landing-product.png" alt="墨律桌面应用界面预览" />
+          </div>
+          <div class="preview-layer">
+            <div class="preview-title"><span>引用核验</span><span id="preview-version">v—</span></div>
+            <div class="doc-lines" aria-hidden="true">
+              <i></i><i></i><i></i><i></i>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="download-section" id="download">
+        <div class="download-panel">
+          <div class="release-card">
+            <h2>下载与你系统匹配的版本</h2>
+            <div class="release-meta">
+              <div class="meta-item">
+                <b id="release-version">—</b>
+                <span>最新版本</span>
+              </div>
+              <div class="meta-item">
+                <b id="release-channel">stable</b>
+                <span>发布通道</span>
+              </div>
+              <div class="meta-item">
+                <b id="release-signature">—</b>
+                <span>签名 / SHA-256</span>
+              </div>
+              <div class="meta-item">
+                <b id="release-date">—</b>
+                <span>发布时间</span>
+              </div>
+            </div>
+          </div>
+          <div class="platforms">
+            <div class="platform-head">
+              <strong>平台安装包</strong>
+              <span class="detected" id="detected-label">正在识别系统</span>
+            </div>
+            <div class="platform-grid" id="platform-grid"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="features" id="security">
+        <div class="section-title">
+          <h2>服务于律师真实工作流</h2>
+          <p>墨律不把文书生成当作孤立按钮，而是把材料、检索、引用、风险提示和反馈运营串成可追踪的闭环。</p>
+        </div>
+        <div class="feature-grid">
+          <article class="feature"><b>本地优先</b><p>会话、材料、API Key 和反馈状态保存在本地数据库，文件访问走 Tauri 沙箱命令。</p></article>
+          <article class="feature"><b>法规/案例检索</b><p>接入本地法库和 MCP 检索源，输出中保留待核验状态和来源线索。</p></article>
+          <article class="feature"><b>文书起草</b><p>支持合同、诉状、法律意见书、尽调报告、律师函等常用中文法律文书。</p></article>
+          <article class="feature"><b>引用核验</b><p>把法规、案例和风险条款拆成可检查的引用面板，便于律师复核。</p></article>
+          <article class="feature"><b>DOCX 导出</b><p>结构化文书可进入预览区并导出为可继续编辑的办公文档。</p></article>
+          <article class="feature"><b>反馈闭环</b><p>点赞、点踩、维度标签和说明进入 outbox，供团队运营和 skill 改进使用。</p></article>
+          <article class="feature"><b>Skill 更新</b><p>同步服务分发 stable/beta skill 包，让法律能力可以独立于客户端迭代。</p></article>
+          <article class="feature"><b>更新校验</b><p>App 安装包沿用 Tauri updater manifest，官网显示签名和校验信息。</p></article>
+        </div>
+      </section>
+
+      <section class="ops">
+        <div class="ops-inner">
+          <div>
+            <h2>同一服务，承载官网、更新与反馈运营</h2>
+            <p>根路径面向用户下载，管理台保留在 /admin，反馈与发布 API 继续服务桌面客户端。</p>
+          </div>
+          <div class="ops-actions">
+            <a href="/admin">进入反馈运营台</a>
+            <a href="/health" id="health-link">查看服务状态</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <span>© 墨律 Inkstatute</span>
+      <span>AI 输出为律师审查草稿，不构成法律意见。</span>
+    </footer>
+  </div>
+
+  <script>
+    const TARGET_LABELS = {
+      windows: "Windows",
+      macos: "macOS",
+      linux: "Linux",
+    };
+
+    const FALLBACK_TARGETS = [
+      { target: "windows", label: "Windows", arch: "x64" },
+      { target: "macos", label: "macOS", arch: "universal" },
+      { target: "linux", label: "Linux", arch: "x64" },
+    ];
+
+    const $ = (id) => document.getElementById(id);
+
+    function detectClientTarget() {
+      const platform = (navigator.userAgentData && navigator.userAgentData.platform) ||
+        navigator.platform ||
+        navigator.userAgent ||
+        "";
+      const value = platform.toLowerCase();
+      if (value.includes("mac")) return "macos";
+      if (value.includes("linux")) return "linux";
+      return "windows";
+    }
+
+    function shortHash(value) {
+      if (!value) return "—";
+      return value.length > 18 ? value.slice(0, 10) + "…" + value.slice(-6) : value;
+    }
+
+    function formatDate(value) {
+      if (!value) return "—";
+      const d = new Date(value);
+      if (Number.isNaN(d.getTime())) return value;
+      return d.toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" });
+    }
+
+    function renderPlatforms(catalog) {
+      const clientTarget = detectClientTarget();
+      const options = catalog.options && catalog.options.length
+        ? catalog.options
+        : FALLBACK_TARGETS.map((item) => ({
+            ...item,
+            platformKey: item.target,
+            url: "",
+            recommended: item.target === clientTarget,
+          }));
+
+      const primary = options.find((item) => item.target === clientTarget) || catalog.primary || options[0];
+      const configured = Boolean(catalog.configured && primary && primary.url);
+
+      $("detected-label").textContent = `已识别：${TARGET_LABELS[clientTarget]}`;
+      $("primary-download-label").textContent = configured
+        ? `下载 ${TARGET_LABELS[primary.target]} 版`
+        : "安装包暂未发布";
+      $("preview-version").textContent = catalog.version ? `v${catalog.version}` : "v—";
+      $("release-version").textContent = catalog.version || "未发布";
+      $("release-channel").textContent = catalog.channel || "stable";
+      $("release-date").textContent = formatDate(catalog.pubDate);
+      $("release-signature").textContent = shortHash(primary && (primary.checksum || primary.signature));
+
+      const primaryLink = $("primary-download");
+      if (configured) {
+        primaryLink.href = primary.url;
+        primaryLink.setAttribute("aria-disabled", "false");
+      } else {
+        primaryLink.href = "#download";
+        primaryLink.setAttribute("aria-disabled", "true");
+      }
+
+      $("platform-grid").innerHTML = options.map((item) => {
+        const available = Boolean(item.url);
+        const recommended = item.target === clientTarget ? " recommended" : "";
+        const ctaClass = available ? "" : " class=\"disabled\"";
+        const href = available ? item.url : "#download";
+        const sub = available
+          ? `${item.arch || "universal"} · ${shortHash(item.checksum || item.signature)}`
+          : "等待发布配置";
+        return `
+          <article class="platform-card${recommended}">
+            <div>
+              <div class="platform-name">${TARGET_LABELS[item.target] || item.label}</div>
+              <div class="platform-sub">${sub}</div>
+            </div>
+            <a${ctaClass} href="${href}">${available ? "下载安装包" : "暂未发布"}</a>
+          </article>
+        `;
+      }).join("");
+    }
+
+    async function loadDownloads() {
+      try {
+        const res = await fetch("/api/app/downloads");
+        if (!res.ok) throw new Error("download catalog unavailable");
+        renderPlatforms(await res.json());
+      } catch {
+        renderPlatforms({ configured: false, options: [], channel: "stable" });
+      }
+    }
+
+    async function checkHealth() {
+      try {
+        const res = await fetch("/health");
+        const data = await res.json();
+        $("health-label").textContent = data.ok ? "同步服务在线" : "同步服务状态待确认";
+      } catch {
+        $("health-label").textContent = "同步服务状态待确认";
+      }
+    }
+
+    checkHealth();
+    loadDownloads();
+  </script>
+</body>
+</html>

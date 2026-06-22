@@ -89,7 +89,13 @@
   background: var(--ml-surface-2, #f0f0f0);
 }
 
-.msg-feedback-done {
+.msg-feedback-btn.active {
+  background: var(--ml-accent-soft, #e8f0fe);
+  border-color: var(--ml-accent, #4a6fa5);
+}
+
+.msg-feedback-status {
   font-size: 0.75rem;
   color: var(--ml-muted, #888);
+  margin-top: 0.3rem;
 }

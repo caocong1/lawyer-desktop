@@ -9,55 +9,6 @@
   margin-right: auto;
 }
 
-.home-history-btn {
-  height: 34px;
-  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
-  background: color-mix(in srgb, var(--surface) 82%, var(--accent-soft));
-  color: var(--accent);
-  border-radius: 10px;
-  padding: 0 13px;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  cursor: pointer;
-  font-size: 12.5px;
-  font-weight: 500;
-  box-shadow: 0 8px 22px -18px color-mix(in srgb, var(--accent) 45%, transparent);
-  transition: background 0.15s, border-color 0.15s, transform 0.15s;
-  white-space: nowrap;
-}
-
-.home-history-btn:hover {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  transform: translateY(-1px);
-}
-
-.home-history-btn:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
-  outline-offset: 2px;
-}
-
-.home-history-btn svg {
-  width: 15px;
-  height: 15px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.7;
-}
-
-[data-theme="b"] .home-history-btn {
-  background: rgba(107, 155, 255, 0.1);
-  border-color: rgba(107, 155, 255, 0.34);
-  box-shadow: 0 0 18px -13px var(--accent);
-}
-
-[data-theme="c"] .home-history-btn {
-  background: #fafaf8;
-  border-color: #e4e8e2;
-  box-shadow: none;
-}
-
 .starter-input {
   width: 100%;
   border: none;
@@ -181,4 +132,9 @@
   top: calc(100% + 6px);
   left: 0;
   z-index: 20;
+}
+
+.starter-field .mc-editor {
+  min-height: 96px;
+  font-size: 15px;
 }

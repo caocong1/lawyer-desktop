@@ -1,5 +1,6 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { open } from "@tauri-apps/plugin-dialog";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { SolidMarkdown } from "solid-markdown";
 import remarkGfm from "remark-gfm";
 import type { AgentMode } from "../../types/agentMode";
@@ -9,8 +10,9 @@ import type { Message } from "../../stores/conversation";
 import { useTrace } from "../../stores/trace";
 import { containsToolLeakage } from "../../utils/legalDocument";
 import type { ContextRefPayload } from "../../types/contextRefs";
-import { onChatStream, onWorkspaceIndexProgress } from "../../services/api";
+import { classifyDroppedPaths, onChatStream, onWorkspaceIndexProgress } from "../../services/api";
 import type { ClarificationAnswer, WorkflowState } from "../../types/workflow";
+import type { UserAttachmentCard } from "../../utils/contextRefs";
 import {
   formatFullTime,
   formatTimeDivider,
@@ -18,15 +20,17 @@ import {
   shouldShowTimeDivider,
 } from "../../utils/chatTime";
 import { isVisibleChatMessage } from "../../utils/chatVisibility";
+import { canSendWithContext } from "../../utils/contextRefs";
 import { MessageFeedback } from "./MessageFeedback";
 import { Icon } from "../icons/Icons";
-import { MentionMenu } from "../MentionMenu";
+import { MentionComposer } from "../MentionComposer";
+import type { MentionComposerApi } from "../MentionComposer";
 import {
   ClarificationCard,
+  ModeSwitchCard,
   WorkflowNotice,
   WorkflowSuggestions,
 } from "./WorkflowProgressSteps";
-import { detectAtTrigger, filterMentionCandidates, buildMentionInsert } from "../../utils/mentions";
 import "./ChatPanel.css";
 
 function pathToAlias(path: string, kind: ContextRefPayload["kind"]): string {
@@ -43,6 +47,24 @@ function AssistantContent(props: { text: string }) {
   return (
     <div class="prose chat-md">
       <SolidMarkdown remarkPlugins={[remarkGfm]}>{props.text}</SolidMarkdown>
+    </div>
+  );
+}
+
+function UserAttachment(props: { attachment: UserAttachmentCard }) {
+  const icon = () => (props.attachment.tone === "folder" ? "folder" : "file2");
+  return (
+    <div
+      class={`user-attachment-card ${props.attachment.tone}`}
+      title={props.attachment.path ?? props.attachment.alias}
+    >
+      <span class="user-attachment-icon">
+        <Icon name={icon()} />
+      </span>
+      <span class="user-attachment-meta">
+        <span class="user-attachment-name">{props.attachment.alias}</span>
+        <span class="user-attachment-type">{props.attachment.typeLabel}</span>
+      </span>
     </div>
   );
 }
@@ -97,6 +119,11 @@ export function ChatPanel(props: ChatPanelProps) {
     workspacePrompt,
     workspaceMode,
     workspaceModeLabel,
+    committedMode,
+    committedLabel,
+    pendingModeSwitch,
+    confirmModeSwitch,
+    cancelModeSwitch,
     isStreaming,
     streamingContent,
     streamPhase,
@@ -107,6 +134,7 @@ export function ChatPanel(props: ChatPanelProps) {
     setStreamStatus,
     activeConversationId,
     messageDisplayContent,
+    messageDisplayParts,
     messageWorkflow,
     activeWorkflow,
     submitClarificationAnswers,
@@ -114,6 +142,7 @@ export function ChatPanel(props: ChatPanelProps) {
     addContextRef,
     removeContextRef,
     addInlineMention,
+    removeInlineMention,
     applyWorkspaceIndexProgress,
     workspaceIndexForPath,
   } = useConversation();
@@ -121,13 +150,10 @@ export function ChatPanel(props: ChatPanelProps) {
 
   const [text, setText] = createSignal("");
   const [attachMenuOpen, setAttachMenuOpen] = createSignal(false);
-  const [mentionOpen, setMentionOpen] = createSignal(false);
-  const [mentionQuery, setMentionQuery] = createSignal("");
-  const [mentionIndex, setMentionIndex] = createSignal(0);
+  const [dragActive, setDragActive] = createSignal(false);
   let threadRef: HTMLDivElement | undefined;
-  let taRef: HTMLTextAreaElement | undefined;
+  let composer: MentionComposerApi | undefined;
   let attachRef: HTMLDivElement | undefined;
-  let mentionMenuRef: HTMLDivElement | undefined;
 
   const visibleMessages = () =>
     messages().filter((m) => isVisibleChatMessage(m));
@@ -183,10 +209,6 @@ export function ChatPanel(props: ChatPanelProps) {
     return withTime;
   });
 
-  const mentionCandidates = createMemo(() =>
-    filterMentionCandidates(pendingContextRefs(), mentionQuery()),
-  );
-
   createEffect(() => {
     timelineItems();
     isStreaming();
@@ -203,15 +225,13 @@ export function ChatPanel(props: ChatPanelProps) {
       if (attachMenuOpen() && attachRef && !attachRef.contains(e.target as Node)) {
         setAttachMenuOpen(false);
       }
-      if (mentionOpen() && mentionMenuRef && !mentionMenuRef.contains(e.target as Node)) {
-        setMentionOpen(false);
-      }
     };
     document.addEventListener("click", onDocClick);
 
     let disposed = false;
     let unlistenProgress: (() => void) | undefined;
     let unlistenStream: (() => void) | undefined;
+    let unlistenDrop: (() => void) | undefined;
 
     void onWorkspaceIndexProgress((event) => {
       if (
@@ -241,86 +261,43 @@ export function ChatPanel(props: ChatPanelProps) {
       else unlistenStream = u;
     });
 
+    // OS file/folder drag-and-drop onto the window. dragDropEnabled must be true
+    // in tauri.conf.json or these events never fire. The event is webview-wide,
+    // so we accept a drop anywhere in the window and highlight the composer.
+    void getCurrentWebview()
+      .onDragDropEvent((event) => {
+        const payload = event.payload;
+        if (payload.type === "enter" || payload.type === "over") {
+          if (!props.sending()) setDragActive(true);
+        } else if (payload.type === "drop") {
+          setDragActive(false);
+          void handleDroppedPaths(payload.paths);
+        } else {
+          // "leave"
+          setDragActive(false);
+        }
+      })
+      .then((u) => {
+        if (disposed) u();
+        else unlistenDrop = u;
+      })
+      .catch((e) => console.error("注册拖放监听失败:", e));
+
     onCleanup(() => {
       disposed = true;
       document.removeEventListener("click", onDocClick);
       unlistenProgress?.();
       unlistenStream?.();
+      unlistenDrop?.();
     });
   });
 
   function send() {
     const t = text().trim();
-    if (!t || props.sending()) return;
+    if (!canSendWithContext(t, pendingContextRefs(), props.sending())) return;
     setText("");
-    if (taRef) taRef.style.height = "auto";
+    composer?.clear();
     props.onSend(t);
-  }
-
-  function onKey(e: KeyboardEvent) {
-    if (e.isComposing) return;
-    if (mentionOpen()) {
-      const cands = mentionCandidates();
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setMentionOpen(false);
-        return;
-      }
-      if (cands.length > 0 && e.key === "ArrowDown") {
-        e.preventDefault();
-        setMentionIndex((i) => (i + 1) % cands.length);
-        return;
-      }
-      if (cands.length > 0 && e.key === "ArrowUp") {
-        e.preventDefault();
-        setMentionIndex((i) => (i - 1 + cands.length) % cands.length);
-        return;
-      }
-      if (cands.length > 0 && (e.key === "Enter" || e.key === "Tab")) {
-        e.preventDefault();
-        const ref = cands[mentionIndex()];
-        if (ref) insertMention(ref);
-        return;
-      }
-    }
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      send();
-    }
-  }
-
-  function grow(e: Event) {
-    const ta = e.currentTarget as HTMLTextAreaElement;
-    ta.style.height = "auto";
-    ta.style.height = `${Math.min(ta.scrollHeight, 120)}px`;
-    setText(ta.value);
-    const trigger = detectAtTrigger(ta.value, ta.selectionStart ?? ta.value.length);
-    if (trigger.active) {
-      setMentionOpen(true);
-      setMentionQuery(trigger.query);
-      setMentionIndex(0);
-    } else {
-      setMentionOpen(false);
-    }
-  }
-
-  function insertMention(ref: ContextRefPayload) {
-    const ta = taRef;
-    if (!ta) return;
-    const val = text();
-    const trigger = detectAtTrigger(val, ta.selectionStart ?? val.length);
-    if (!trigger.active) return;
-    const { newText, cursorAfter } = buildMentionInsert(ref, trigger.atPos, ta.selectionStart ?? val.length, val);
-    setText(newText);
-    addContextRef(ref);
-    addInlineMention(ref.path);
-    setMentionOpen(false);
-    requestAnimationFrame(() => {
-      ta.focus();
-      ta.setSelectionRange(cursorAfter, cursorAfter);
-      ta.style.height = "auto";
-      ta.style.height = `${Math.min(ta.scrollHeight, 120)}px`;
-    });
   }
 
   async function pickContextRef(kind: ContextRefPayload["kind"]) {
@@ -341,12 +318,37 @@ export function ChatPanel(props: ChatPanelProps) {
     }
   }
 
+  // Attach OS-dropped paths the same way the picker does: classify each path
+  // (file vs. directory) on the backend, then route through addContextRef so
+  // directories get bound/indexed and files become @-mention refs.
+  async function handleDroppedPaths(paths: string[]) {
+    if (props.sending()) return;
+    const cleaned = paths.filter((p) => typeof p === "string" && p.trim().length > 0);
+    if (cleaned.length === 0) return;
+    try {
+      const kinds = await classifyDroppedPaths(cleaned);
+      for (const item of kinds) {
+        if (!item.exists) continue;
+        const kind: ContextRefPayload["kind"] = item.is_dir ? "directory" : "file";
+        addContextRef({
+          alias: pathToAlias(item.path, kind),
+          path: item.path,
+          kind,
+        });
+      }
+    } catch (e) {
+      console.error("处理拖放文件失败:", e);
+    }
+  }
+
+  // Prefer the committed producing task so a mid-task Q&A (aside) turn doesn't
+  // relabel the header away from the document the user is still working on.
   const title = () =>
     sessionTitle(
       workspacePrompt(),
       visibleMessages().length,
-      workspaceMode(),
-      workspaceModeLabel(),
+      committedMode() ?? workspaceMode(),
+      committedLabel() || workspaceModeLabel(),
     );
 
   const phaseLabel = () => {
@@ -380,13 +382,9 @@ export function ChatPanel(props: ChatPanelProps) {
   };
 
   function insertSuggestion(prompt: string) {
+    composer?.clear();
+    composer?.insertText(prompt);
     setText(prompt);
-    requestAnimationFrame(() => {
-      if (!taRef) return;
-      taRef.focus();
-      taRef.style.height = "auto";
-      taRef.style.height = `${Math.min(taRef.scrollHeight, 120)}px`;
-    });
   }
 
   function answerClarification(messageId: string, answers: ClarificationAnswer[]) {
@@ -395,8 +393,10 @@ export function ChatPanel(props: ChatPanelProps) {
     });
   }
 
+  const canSubmit = () => canSendWithContext(text(), pendingContextRefs(), props.sending());
+
   return (
-    <div class="chat" style={{ "--chat-w": "500px" }}>
+    <div class="chat">
       <div class="chat-ctx">
         <div class="dic">
           <Icon name="doc" />
@@ -427,8 +427,8 @@ export function ChatPanel(props: ChatPanelProps) {
             <div class="msg msg-agent">
               <div class="ava">墨</div>
               <div class="agent-body">
-                <div class="agent-name">墨律 · 法律文书助理</div>
-                <AssistantContent text="描述你的起草需求，或在下方向我补充指示。" />
+                <div class="agent-name">墨律 · 法律问答与文书助理</div>
+                <AssistantContent text="描述法律问题、资料链接或起草需求，我会按需要检索法规、案例与公开资料。" />
               </div>
             </div>
           }
@@ -451,15 +451,27 @@ export function ChatPanel(props: ChatPanelProps) {
                 );
               }
               const m = item.message;
+              const displayParts = () => messageDisplayParts(m);
               return m.role === "user" ? (
                 <div class="msg msg-user" title={timeTitle(item.tsMs)}>
-                  <div class="bubble-user">{m.content}</div>
+                  <div class="user-msg-stack">
+                    <Show when={displayParts().attachments.length > 0}>
+                      <div class="user-attachments">
+                        <For each={displayParts().attachments}>
+                          {(attachment) => <UserAttachment attachment={attachment} />}
+                        </For>
+                      </div>
+                    </Show>
+                    <Show when={displayParts().text.trim()}>
+                      {(content) => <div class="bubble-user">{content()}</div>}
+                    </Show>
+                  </div>
                 </div>
               ) : (
                 <div class="msg msg-agent" title={timeTitle(item.tsMs)}>
                   <div class="ava">墨</div>
                   <div class="agent-body">
-                    <div class="agent-name">墨律 · 法律文书助理</div>
+                    <div class="agent-name">墨律 · 法律问答与文书助理</div>
                     <Show when={messageDisplayContent(m).trim()}>
                       {(content) => <AssistantContent text={content()} />}
                     </Show>
@@ -501,7 +513,7 @@ export function ChatPanel(props: ChatPanelProps) {
           <div class="msg msg-agent" title={formatFullTime(Date.now())}>
             <div class="ava">墨</div>
             <div class="agent-body">
-              <div class="agent-name">墨律 · 法律文书助理</div>
+              <div class="agent-name">墨律 · 法律问答与文书助理</div>
               <AssistantContent text={streamingContent()} />
             </div>
           </div>
@@ -510,7 +522,7 @@ export function ChatPanel(props: ChatPanelProps) {
           <div class="msg msg-agent">
             <div class="ava">墨</div>
             <div class="agent-body">
-              <div class="agent-name">墨律 · 法律文书助理</div>
+              <div class="agent-name">墨律 · 法律问答与文书助理</div>
               <div class="streaming-wait">
                 <span class="streaming-wait-dot" />
                 {phaseLabel()}
@@ -522,7 +534,7 @@ export function ChatPanel(props: ChatPanelProps) {
           <div class="msg msg-agent">
             <div class="ava">墨</div>
             <div class="agent-body">
-              <div class="agent-name">墨律 · 法律文书助理</div>
+              <div class="agent-name">墨律 · 法律问答与文书助理</div>
               <div class="streaming-wait">
                 <span class="streaming-wait-dot" />
                 {phaseLabel()}
@@ -537,21 +549,49 @@ export function ChatPanel(props: ChatPanelProps) {
             !showEvidenceProgress() &&
             !activeDraftResponse() &&
             !activeEvidenceResponse() &&
-            streamingContent()
+            streamingContent() &&
+            !containsToolLeakage(streamingContent())
           }
         >
           <div class="msg msg-agent">
             <div class="ava">墨</div>
             <div class="agent-body">
-              <div class="agent-name">墨律 · 法律文书助理</div>
+              <div class="agent-name">墨律 · 法律问答与文书助理</div>
               <AssistantContent text={streamingContent()} />
             </div>
           </div>
         </Show>
+        <Show when={pendingModeSwitch()}>
+          {(pending) => (
+            <div class="msg msg-agent">
+              <div class="ava">墨</div>
+              <div class="agent-body">
+                <div class="agent-name">墨律 · 法律问答与文书助理</div>
+                <ModeSwitchCard
+                  curLabel={pending().curLabel}
+                  newLabel={pending().newLabel}
+                  disabled={props.sending}
+                  onSwitch={() => confirmModeSwitch("switch")}
+                  onContinue={() => confirmModeSwitch("continue")}
+                  onCustom={() => {
+                    insertSuggestion(pending().text);
+                    cancelModeSwitch();
+                  }}
+                />
+              </div>
+            </div>
+          )}
+        </Show>
       </div>
 
       <div class="composer">
-        <div class="input-box">
+        <div class="input-box" classList={{ "drag-active": dragActive() }}>
+          <Show when={dragActive()}>
+            <div class="drop-overlay">
+              <Icon name="attach" />
+              <span>拖放文件或文件夹，作为上下文附加</span>
+            </div>
+          </Show>
           <Show when={pendingContextRefs().length > 0}>
             <div class="context-ref-chips">
               <For each={pendingContextRefs()}>
@@ -591,25 +631,20 @@ export function ChatPanel(props: ChatPanelProps) {
             </div>
           </Show>
           <div class="textarea-wrap">
-            <textarea
-              ref={taRef}
-              rows={1}
-              placeholder="补充指示，或描述新的起草需求……"
-              value={text()}
-              onInput={grow}
-              onKeyDown={onKey}
+            <MentionComposer
+              class="chat-input"
+              placeholder="描述法律问题、资料链接或新的起草需求……"
               disabled={props.sending()}
+              candidates={pendingContextRefs()}
+              onReady={(api) => (composer = api)}
+              onInput={(value) => setText(value)}
+              onInsertMention={(ref) => {
+                addContextRef(ref);
+                addInlineMention(ref.path);
+              }}
+              onRemoveMention={(path) => removeInlineMention(path)}
+              onSend={send}
             />
-            <Show when={mentionOpen() && pendingContextRefs().length > 0}>
-              <div class="mention-wrap" ref={mentionMenuRef}>
-                <MentionMenu
-                  candidates={mentionCandidates()}
-                  selectedIndex={mentionIndex()}
-                  onSelect={insertMention}
-                  onDismiss={() => setMentionOpen(false)}
-                />
-              </div>
-            </Show>
           </div>
           <div class="input-row">
             <div class="attach-wrap" ref={attachRef}>
@@ -636,15 +671,27 @@ export function ChatPanel(props: ChatPanelProps) {
                 </div>
               </Show>
             </div>
+            <button
+              type="button"
+              class="tool mc-at-btn"
+              title="插入文件引用"
+              disabled={props.sending()}
+              onClick={() => composer?.promptMention()}
+            >
+              @
+            </button>
             <span class="tool">
               <Icon name="book" />
             </span>
             <span class="grow" />
+            <span class="send-hint">
+              <kbd>Ctrl</kbd>+<kbd>Enter</kbd> 发送
+            </span>
             <button
               type="button"
               class="send-btn"
               onClick={send}
-              disabled={!text().trim() || props.sending()}
+              disabled={!canSubmit()}
             >
               发送
               <Icon name="send" />

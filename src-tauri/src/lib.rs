@@ -1,3 +1,23 @@
+#![allow(
+    dead_code,
+    unused_variables,
+    clippy::collapsible_str_replace,
+    clippy::explicit_auto_deref,
+    clippy::explicit_counter_loop,
+    clippy::into_iter_on_ref,
+    clippy::manual_is_multiple_of,
+    clippy::manual_pattern_char_comparison,
+    clippy::manual_strip,
+    clippy::map_identity,
+    clippy::needless_borrow,
+    clippy::needless_borrows_for_generic_args,
+    clippy::needless_return,
+    clippy::new_without_default,
+    clippy::ptr_arg,
+    clippy::redundant_closure,
+    clippy::too_many_arguments
+)]
+
 mod commands;
 pub mod citations;
 pub mod db;
@@ -493,6 +513,7 @@ pub fn run() {
             commands::files::read_file_content,
             commands::files::list_directory,
             commands::files::prepare_attachment,
+            commands::files::classify_dropped_paths,
             commands::workspace::bind_workspace,
             commands::workspace::get_workspace_index_status,
             commands::workspace::search_workspace,

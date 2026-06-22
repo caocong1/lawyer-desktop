@@ -211,6 +211,17 @@
   color: var(--ink);
 }
 
+.clarify-q-hint {
+  margin-left: 4px;
+  font-size: 11.5px;
+  color: var(--ink-muted, var(--ink-soft));
+  font-weight: 400;
+}
+
+.clarify-options.multi .clarify-option.on {
+  box-shadow: inset 0 0 0 1px var(--accent, var(--line));
+}
+
 .clarify-options {
   display: flex;
   flex-wrap: wrap;

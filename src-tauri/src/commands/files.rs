@@ -219,6 +219,36 @@ pub async fn prepare_attachment(
     })
 }
 
+/// Kind classification for an OS drag-and-drop path.
+///
+/// The webview drag-drop event only yields raw paths; the composer needs each
+/// path's kind to attach it the same way the dialog picker does — files become
+/// file refs, directories become indexed workspace refs. This is a plain
+/// `metadata` probe (no sandbox), since the user explicitly dropped the path.
+#[derive(Debug, Clone, Serialize)]
+pub struct DroppedPathKind {
+    pub path: String,
+    pub is_dir: bool,
+    pub exists: bool,
+}
+
+#[tauri::command]
+pub async fn classify_dropped_paths(paths: Vec<String>) -> Result<Vec<DroppedPathKind>, String> {
+    let mut out = Vec::with_capacity(paths.len());
+    for path in paths {
+        let (is_dir, exists) = match tokio::fs::metadata(&path).await {
+            Ok(meta) => (meta.is_dir(), true),
+            Err(_) => (false, false),
+        };
+        out.push(DroppedPathKind {
+            path,
+            is_dir,
+            exists,
+        });
+    }
+    Ok(out)
+}
+
 pub fn build_sandbox(extra_dirs: &[String]) -> Result<PathSandbox, String> {
     PathSandbox::with_defaults(extra_dirs).map_err(|e| e.to_string())
 }

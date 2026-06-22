@@ -9,6 +9,7 @@ cd tools/sync-service
 bun install
 bun run dev
 # 默认 http://127.0.0.1:8787
+# 管理台 http://127.0.0.1:8787/admin
 ```
 
 ## 环境变量
@@ -19,6 +20,17 @@ bun run dev
 | `SYNC_HOST` | 绑定地址，默认 127.0.0.1 |
 | `SYNC_API_KEY` | 若设置，客户端需 `Authorization: Bearer <key>` |
 | `SYNC_DATA_DIR` | 数据目录，默认 `./data` |
+
+## 管理 Web 页
+
+启动服务后打开 **http://127.0.0.1:8787/admin**（`/` 同页）：
+
+- 汇总统计（好评/差评、open/handled）
+- 筛选、列表、详情抽屉
+- 单条 / 批量 triage（状态、目标仓库、备注）
+- 导出 Markdown / JSON（与 API 相同筛选参数）
+
+若设置了 `SYNC_API_KEY`，页面会提示输入 Bearer token（保存在 sessionStorage，仅当前标签页）。
 
 ## API
 

@@ -37,6 +37,7 @@ function workflowTitle(wf: WorkflowState | undefined): string {
   if (wf?.mode_label) return wf.mode_label;
   if (wf?.mode === "evidence") return "案情分析";
   if (wf?.mode === "draft") return "文书起草";
+  if (wf?.mode === "chat") return "法律问答";
   return "处理进度";
 }
 
@@ -53,15 +54,44 @@ function questionAnswerKey(messageId: string, question: ClarificationQuestion): 
   return `${messageId}:${question.id}`;
 }
 
+type ClarificationSelection = { value: string; label: string };
+
 function optionDisplayForAnswer(
   question: ClarificationQuestion,
   answer: string | undefined,
 ): string | undefined {
   if (!answer) return undefined;
-  const option = question.options.find(
-    (opt) => opt.value === answer || opt.label === answer || opt.id === answer,
-  );
-  return option?.label ?? answer;
+  const parts = answer.includes("|") ? answer.split("|") : [answer];
+  const labels = parts
+    .map((part) => {
+      const trimmed = part.trim();
+      if (!trimmed) return undefined;
+      const option = question.options.find(
+        (opt) => opt.value === trimmed || opt.label === trimmed || opt.id === trimmed,
+      );
+      return option?.label ?? trimmed;
+    })
+    .filter((label): label is string => !!label);
+  return labels.length > 0 ? labels.join("、") : answer;
+}
+
+function isOptionSelected(
+  selections: ClarificationSelection[],
+  value: string,
+): boolean {
+  return selections.some((item) => item.value === value);
+}
+
+function toggleSelection(
+  prev: ClarificationSelection[],
+  entry: ClarificationSelection,
+  allowMultiple: boolean,
+): ClarificationSelection[] {
+  if (!allowMultiple) return [entry];
+  if (isOptionSelected(prev, entry.value)) {
+    return prev.filter((item) => item.value !== entry.value);
+  }
+  return [...prev, entry];
 }
 
 export function WorkflowNotice(props: WorkflowNoticeProps) {
@@ -114,9 +144,7 @@ export function WorkflowNotice(props: WorkflowNoticeProps) {
 }
 
 export function ClarificationCard(props: ClarificationCardProps) {
-  const [selected, setSelected] = createSignal<
-    Record<string, { value: string; label: string }>
-  >({});
+  const [selected, setSelected] = createSignal<Record<string, ClarificationSelection[]>>({});
   const [freeText, setFreeText] = createSignal<Record<string, string>>({});
 
   const workflow = () => props.workflow();
@@ -129,7 +157,8 @@ export function ClarificationCard(props: ClarificationCardProps) {
     if (!wf || !c || !pending()) return false;
     return c.questions.every((q) => {
       const key = questionAnswerKey(wf.message_id, q);
-      return (freeText()[key] || selected()[key]?.value || "").trim().length > 0;
+      const hasSelection = (selected()[key] ?? []).length > 0;
+      return hasSelection || (freeText()[key] || "").trim().length > 0;
     });
   });
 
@@ -147,12 +176,14 @@ export function ClarificationCard(props: ClarificationCardProps) {
         display_answer: free,
       };
     }
-    const chosen = selected()[key];
+    const chosen = selected()[key] ?? [];
+    const values = chosen.map((item) => item.value).join("|");
+    const labels = chosen.map((item) => item.label).join("、");
     return {
       question_id: question.id,
       question: question.question,
-      answer: chosen?.value ?? "",
-      display_answer: chosen?.label ?? chosen?.value ?? "",
+      answer: values,
+      display_answer: labels,
     };
   }
 
@@ -186,25 +217,34 @@ export function ClarificationCard(props: ClarificationCardProps) {
                 <div class="clarify-q">
                   <div class="clarify-q-title">
                     {index() + 1}. {q.question}
+                    <Show when={q.allow_multiple}>
+                      <span class="clarify-q-hint">（可多选）</span>
+                    </Show>
                   </div>
                   <Show
                     when={c().status === "answered"}
                     fallback={
                       <>
-                        <div class="clarify-options">
+                        <div class={`clarify-options${q.allow_multiple ? " multi" : ""}`}>
                           <For each={q.options}>
                             {(opt: ClarificationOption) => {
                               const value = () => opt.value ?? opt.label;
+                              const on = () =>
+                                isOptionSelected(selected()[key()] ?? [], value());
                               return (
                                 <button
                                   type="button"
-                                  class={`clarify-option${selected()[key()]?.value === value() ? " on" : ""}`}
+                                  class={`clarify-option${on() ? " on" : ""}`}
                                   disabled={props.disabled?.()}
                                   title={opt.description}
                                   onClick={() =>
                                     setSelected((prev) => ({
                                       ...prev,
-                                      [key()]: { value: value(), label: opt.label },
+                                      [key()]: toggleSelection(
+                                        prev[key()] ?? [],
+                                        { value: value(), label: opt.label },
+                                        q.allow_multiple === true,
+                                      ),
                                     }))
                                   }
                                 >
@@ -253,6 +293,56 @@ export function ClarificationCard(props: ClarificationCardProps) {
         </div>
       )}
     </Show>
+  );
+}
+
+export interface ModeSwitchCardProps {
+  curLabel: string;
+  newLabel: string;
+  disabled?: () => boolean;
+  onSwitch: () => void;
+  onContinue: () => void;
+  onCustom: () => void;
+}
+
+/** Pre-turn confirmation shown when a message would switch away from the
+ *  committed producing task. Reuses the clarification card styling. */
+export function ModeSwitchCard(props: ModeSwitchCardProps) {
+  return (
+    <div class="clarify-card pending mode-switch-card">
+      <p class="clarify-intro">
+        检测到你可能想从「{props.curLabel}」切换为「{props.newLabel}」。要怎么做？
+      </p>
+      <div class="clarify-options">
+        <button
+          type="button"
+          class="clarify-option"
+          disabled={props.disabled?.()}
+          onClick={() => props.onSwitch()}
+        >
+          <span>切换到「{props.newLabel}」</span>
+          <small>当前「{props.curLabel}」草稿将归档保留在对话中</small>
+        </button>
+        <button
+          type="button"
+          class="clarify-option"
+          disabled={props.disabled?.()}
+          onClick={() => props.onContinue()}
+        >
+          <span>继续完善「{props.curLabel}」</span>
+          <small>把这条当作对当前文书的修改</small>
+        </button>
+        <button
+          type="button"
+          class="clarify-option"
+          disabled={props.disabled?.()}
+          onClick={() => props.onCustom()}
+        >
+          <span>都不是，我再说明…</span>
+          <small>把这条消息放回输入框重新编辑</small>
+        </button>
+      </div>
+    </div>
   );
 }
 

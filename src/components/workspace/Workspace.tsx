@@ -1,6 +1,13 @@
-import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { useConversation } from "../../stores/conversation";
 import { onLawUpdateAlert, onSkillsUpdated } from "../../services/api";
+import {
+  CHAT_WIDTH_DEFAULT,
+  clampChatWidth,
+  loadChatWidth,
+  saveChatWidth,
+  shouldShowPreview,
+} from "../../utils/chatLayout";
 import { ChatPanel } from "./ChatPanel";
 import { DocPreview } from "./DocPreview";
 import { CitationPanel } from "./CitationPanel";
@@ -26,13 +33,61 @@ export function Workspace(props: WorkspaceProps) {
     citationGroups,
     setCiteState,
     citeState,
+    committedMode,
+    workspaceMode,
+    legalDocument,
+    documentMarkdown,
+    draftWorkflowActive,
+    activeEvidenceResponse,
   } = useConversation();
 
   const [sending, setSending] = createSignal(false);
   const [refinementOpen, setRefinementOpen] = createSignal(false);
+  const [chatWidth, setChatWidth] = createSignal(loadChatWidth());
   const isDevAdmin = import.meta.env.DEV;
   let docScrollRef: HTMLDivElement | undefined;
+  let wsRef: HTMLDivElement | undefined;
   let initGeneration = 0;
+
+  const showPreview = createMemo(() =>
+    shouldShowPreview({
+      committedMode: committedMode(),
+      workspaceMode: workspaceMode(),
+      hasLegalDocument: legalDocument() !== null,
+      hasMarkdownDoc: documentMarkdown().trim().length > 0,
+      draftWorkflowActive: draftWorkflowActive(),
+      activeEvidenceResponse: activeEvidenceResponse(),
+    }),
+  );
+
+  function beginResize(e: PointerEvent) {
+    if (!wsRef) return;
+    e.preventDefault();
+    const rect = wsRef.getBoundingClientRect();
+    wsRef.classList.add("ws-resizing");
+
+    const onMove = (ev: PointerEvent) => {
+      setChatWidth(clampChatWidth(ev.clientX - rect.left, rect.width));
+    };
+
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      wsRef?.classList.remove("ws-resizing");
+      saveChatWidth(chatWidth());
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  function resetWidth() {
+    const width = wsRef
+      ? clampChatWidth(CHAT_WIDTH_DEFAULT, wsRef.getBoundingClientRect().width)
+      : CHAT_WIDTH_DEFAULT;
+    setChatWidth(width);
+    saveChatWidth(width);
+  }
 
   onMount(() => {
     let disposed = false;
@@ -75,6 +130,14 @@ export function Workspace(props: WorkspaceProps) {
       };
       window.addEventListener("keydown", onKey);
       onCleanup(() => window.removeEventListener("keydown", onKey));
+    }
+
+    if (wsRef && typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(() => {
+        if (wsRef) setChatWidth((w) => clampChatWidth(w, wsRef!.clientWidth));
+      });
+      ro.observe(wsRef);
+      onCleanup(() => ro.disconnect());
     }
   });
 
@@ -159,24 +222,39 @@ export function Workspace(props: WorkspaceProps) {
   const cite = () => citeState();
 
   return (
-    <div class="ws">
+    <div
+      class="ws"
+      classList={{ solo: !showPreview() }}
+      ref={(el) => (wsRef = el)}
+      style={{ "--chat-w": `${chatWidth()}px` }}
+    >
       <ChatPanel onSend={onSend} sending={sending} />
-      <DocPreview
-        onCite={openCite}
-        onRisk={() => {
-          const law = citationGroups().law[0];
-          if (law) openCite(law.key);
-        }}
-        onFix={() => onSend("请根据风险提示补充或修改相关条款。")}
-        onToggleCite={(force) =>
-          setCiteState((c) => ({ ...c, open: force === true ? true : !c.open }))
-        }
-        onToast={props.onToast}
-        docScrollRef={(el) => {
-          docScrollRef = el;
-        }}
-        sheetRef={() => {}}
-      />
+      <Show when={showPreview()}>
+        <div
+          class="ws-splitter"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="调整聊天与文书预览宽度"
+          onPointerDown={beginResize}
+          onDblClick={resetWidth}
+        />
+        <DocPreview
+          onCite={openCite}
+          onRisk={() => {
+            const law = citationGroups().law[0];
+            if (law) openCite(law.key);
+          }}
+          onFix={() => onSend("请根据风险提示补充或修改相关条款。")}
+          onToggleCite={(force) =>
+            setCiteState((c) => ({ ...c, open: force === true ? true : !c.open }))
+          }
+          onToast={props.onToast}
+          docScrollRef={(el) => {
+            docScrollRef = el;
+          }}
+          sheetRef={() => {}}
+        />
+      </Show>
       <CitationPanel
         open={cite().open}
         tab={cite().tab}

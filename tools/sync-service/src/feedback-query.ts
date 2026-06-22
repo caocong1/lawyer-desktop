@@ -1,9 +1,11 @@
-import type {
-  FeedbackPayload,
-  FeedbackRecord,
-  FeedbackWithTriage,
-  TargetRepo,
-  TriageStatus,
+import {
+  effectiveAppVersion,
+  effectiveSkillsVersion,
+  type FeedbackPayload,
+  type FeedbackRecord,
+  type FeedbackWithTriage,
+  type TargetRepo,
+  type TriageStatus,
 } from "./feedback-store.ts";
 
 export interface FeedbackFilters {
@@ -26,6 +28,8 @@ export interface FeedbackSummary {
   by_plugin: Record<string, number>;
   by_status: Record<string, number>;
   by_dimension: Record<string, number>;
+  by_app_version: Record<string, number>;
+  by_skills_version: Record<string, number>;
   down_with_comment: number;
   date_range: { earliest: string | null; latest: string | null };
 }
@@ -74,6 +78,8 @@ export function summarizeFeedback(items: FeedbackWithTriage[]): FeedbackSummary 
     by_plugin: {},
     by_status: {},
     by_dimension: {},
+    by_app_version: {},
+    by_skills_version: {},
     down_with_comment: 0,
     date_range: { earliest: null, latest: null },
   };
@@ -88,6 +94,12 @@ export function summarizeFeedback(items: FeedbackWithTriage[]): FeedbackSummary 
 
     const plugin = p.plugin_name ?? "(none)";
     summary.by_plugin[plugin] = (summary.by_plugin[plugin] ?? 0) + 1;
+
+    const appVer = effectiveAppVersion(item);
+    summary.by_app_version[appVer] = (summary.by_app_version[appVer] ?? 0) + 1;
+
+    const skillsVer = effectiveSkillsVersion(item);
+    summary.by_skills_version[skillsVer] = (summary.by_skills_version[skillsVer] ?? 0) + 1;
 
     const st = item.triage.status;
     summary.by_status[st] = (summary.by_status[st] ?? 0) + 1;
@@ -128,6 +140,8 @@ function formatItem(item: FeedbackWithTriage, index: number): string {
     "",
     `- **remote_id**: \`${item.remote_id}\``,
     `- **时间**: ${recordTime(item)}`,
+    `- **App 版本**: ${effectiveAppVersion(item)}`,
+    `- **Skill 包版本**: ${effectiveSkillsVersion(item)}`,
     `- **状态**: ${item.triage.status}${item.triage.notes ? ` — ${item.triage.notes}` : ""}`,
     `- **建议改仓库**: \`${target}\``,
     `- **维度**: ${dims}`,
@@ -174,6 +188,18 @@ export function exportFeedbackMarkdown(
     "### 按 skill",
     "",
     ...Object.entries(summary.by_skill)
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => `- **${k}**: ${v}`),
+    "",
+    "### 按 App 版本",
+    "",
+    ...Object.entries(summary.by_app_version)
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => `- **${k}**: ${v}`),
+    "",
+    "### 按 Skill 包版本",
+    "",
+    ...Object.entries(summary.by_skills_version)
       .sort((a, b) => b[1] - a[1])
       .map(([k, v]) => `- **${k}**: ${v}`),
     "",

@@ -1,5 +1,6 @@
 import { createSignal } from "solid-js";
-import type { AgentMode } from "../types/agentMode";
+import { agentModeLabel } from "../types/agentMode";
+import type { AgentMode, ClassifyAgentModeResult } from "../types/agentMode";
 import type { ContextRefPayload } from "../types/contextRefs";
 import type {
   Article,
@@ -27,7 +28,13 @@ import {
 } from "../utils/legalDocument";
 import { fallbackFollowupSuggestions } from "../utils/followupSuggestions";
 import { mergeDirectoryRefs } from "../utils/evidenceFlow";
-import { resolveInlineMentions } from "../utils/mentions";
+import {
+  formatUserMessageContentForStorage,
+  formatUserVisibleContent,
+  selectContextRefsForSend,
+  userMessageParts,
+} from "../utils/contextRefs";
+import type { UserMessageParts } from "../utils/contextRefs";
 import {
   getConversations,
   getMessages,
@@ -39,6 +46,7 @@ import {
   classifyAgentMode,
   updateMessageMetadata,
   generateFollowupPrompts,
+  updateConversationTitle as updateConversationTitleApi,
 } from "../services/api";
 import type { AgentTraceEvent } from "../types/trace";
 import type {
@@ -90,6 +98,14 @@ export interface CiteState {
   key: string | null;
 }
 
+interface PendingModeSwitch {
+  newMode: AgentMode;
+  newLabel: string;
+  curLabel: string;
+  text: string;
+  refs: ContextRefPayload[];
+}
+
 const emptyDocMeta = (): DocMeta => ({
   title: "",
   en: "",
@@ -120,6 +136,7 @@ const [citationAuditByMessageId, setCitationAuditByMessageId] = createSignal<
 
 const STREAM_WATCHDOG_MS = 5 * 60 * 1000;
 let streamWatchdog: ReturnType<typeof setTimeout> | null = null;
+let suppressStreamUntilStatus = false;
 
 function clearStreamWatchdog() {
   if (streamWatchdog !== null) {
@@ -258,6 +275,7 @@ function normalizeClarification(payload: Record<string, unknown>): Clarification
         id: typeof q.id === "string" ? q.id : `q${index + 1}`,
         question,
         options,
+        allow_multiple: q.allow_multiple === true,
         allow_free_text: q.allow_free_text !== false,
       };
     })
@@ -423,6 +441,18 @@ function applyTraceToWorkflow(workflow: WorkflowState, e: AgentTraceEvent): Work
 const [workspacePrompt, setWorkspacePrompt] = createSignal<string>("");
 const [workspaceMode, setWorkspaceMode] = createSignal<AgentMode | "idle">("idle");
 const [workspaceModeLabel, setWorkspaceModeLabel] = createSignal<string>("");
+/** The producing task that owns the right-side artifact (draft/evidence), set
+ *  only when such a turn succeeds. Drives the header/preview title so a mid-task
+ *  Q&A (aside) turn doesn't visually hijack the committed document. */
+const [committedMode, setCommittedMode] = createSignal<AgentMode | null>(null);
+const [committedLabel, setCommittedLabel] = createSignal<string>("");
+/** Pending switch-confirmation: set when a turn's intent would replace an
+ *  existing artifact; ChatPanel renders ModeSwitchCard until the user decides. */
+const [pendingModeSwitch, setPendingModeSwitch] = createSignal<PendingModeSwitch | null>(null);
+/** Guards a second turn from being classified while a pre-flight classify is
+ *  still awaiting. The send button is also disabled during sends, but this also
+ *  covers programmatic/rapid sends that would otherwise race. */
+let preflightInFlight = false;
 const [legalDocument, setLegalDocument] = createSignal<LegalDocumentModel | null>(null);
 const [documentMarkdown, setDocumentMarkdown] = createSignal("");
 const [documentId, setDocumentId] = createSignal<string | null>(null);
@@ -459,6 +489,11 @@ function clearDocumentState() {
   setDocMeta(emptyDocMeta());
   setArticles([]);
   setCitationGroups(emptyCitations());
+  // The committed producing task is defined by the presence of an artifact;
+  // clearing the artifact must clear it too, or it leaks across conversations
+  // (switchConversation / selectConversation route through here).
+  setCommittedMode(null);
+  setCommittedLabel("");
 }
 
 type DocumentOrigin = "live" | "restore";
@@ -555,10 +590,14 @@ async function restoreDocumentFromMessages() {
       if (meta.citation_audit) {
         setCitationGroups(auditToCitationGroups(meta.citation_audit));
       }
+      setCommittedMode("evidence");
+      setCommittedLabel(meta.workflow?.mode_label || "案情分析");
       return;
     }
     if (meta?.workflow?.clarification) continue;
     if (await tryApplyDocumentFromContent(m.content, "restore")) {
+      setCommittedMode("draft");
+      setCommittedLabel(meta?.workflow?.mode_label || docMeta().title || "文书起草");
       if (meta?.citation_audit) {
         setCitationGroups(mergeAuditIntoGroups(citationGroups(), meta.citation_audit));
       }
@@ -616,11 +655,17 @@ function metadataForMessage(msg: Message): MessageMetadata | undefined {
 
 function messageDisplayContent(msg: Message): string {
   const meta = metadataForMessage(msg);
+  if (msg.role === "user") return meta?.display_content ?? formatUserVisibleContent(msg.content);
   if (meta?.display_content) return meta.display_content;
   if (meta?.content_hidden) {
     return "已生成草稿，正文见右侧文书预览。如有修改意见请继续补充。";
   }
   return msg.content;
+}
+
+function messageDisplayParts(msg: Message): UserMessageParts {
+  if (msg.role === "user") return userMessageParts(msg.content);
+  return { text: messageDisplayContent(msg), attachments: [] };
 }
 
 function workflowForMessageId(messageId: string): WorkflowState | undefined {
@@ -751,6 +796,43 @@ function persistMessageFeedback(
   };
   attachMetadataToMessage(messageId, metadata);
   persistMessageMetadata(messageId, metadata);
+}
+
+/**
+ * Mirror the resolved agent mode into the layout signals synchronously. The
+ * backend `classify_result` trace event normally does this, but it can arrive
+ * after `finishStreaming` (or be lost entirely on the first auto-send) — this
+ * keeps the right-side preview / status pill in sync from the moment a turn
+ * is dispatched. Safe to call repeatedly: each setter is idempotent.
+ */
+function applyOptimisticMode(forcedMode?: AgentMode, forcedLabel?: string) {
+  if (forcedMode === "draft") {
+    setWorkspaceMode("draft");
+    if (forcedLabel) setWorkspaceModeLabel(forcedLabel);
+    setActiveDraftResponse(true);
+    setActiveEvidenceResponse(false);
+    setDraftWorkflowActive(true);
+  } else if (forcedMode === "evidence") {
+    setWorkspaceMode("evidence");
+    if (forcedLabel) setWorkspaceModeLabel(forcedLabel);
+    setActiveDraftResponse(false);
+    setActiveEvidenceResponse(true);
+    setDraftWorkflowActive(false);
+    setStreamPhase("indexing");
+  } else if (forcedMode === "chat") {
+    setWorkspaceMode("chat");
+    if (forcedLabel) setWorkspaceModeLabel(forcedLabel);
+    setActiveDraftResponse(false);
+    setActiveEvidenceResponse(false);
+    setDraftWorkflowActive(false);
+  } else {
+    // No forced mode — let the backend classify. Reset to a neutral starting
+    // state so leftover flags from a prior producing turn don't show the
+    // preview before the first chunk arrives.
+    setActiveDraftResponse(false);
+    setActiveEvidenceResponse(false);
+    setDraftWorkflowActive(false);
+  }
 }
 
 function completeWorkflowSnapshot(messageId: string): WorkflowState | undefined {
@@ -885,6 +967,32 @@ export function useConversation() {
     return nextActiveId;
   }
 
+  /**
+   * Persist a manual rename and patch the local cache so the drawer shows
+   * the new title without a reload. Trims the input; callers (e.g. the
+   * drawer) should already have validated length with
+   * `validateConversationTitle`. Throws on backend failure without
+   * touching local state.
+   */
+  async function renameConversation(id: string, title: string): Promise<void> {
+    const trimmed = title.trim();
+    if (!trimmed) {
+      throw new Error("标题不能为空");
+    }
+    await updateConversationTitleApi(id, trimmed);
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.id === id
+          ? {
+              ...c,
+              title: trimmed,
+              updated_at: new Date().toISOString(),
+            }
+          : c,
+      ),
+    );
+  }
+
   async function switchConversation(id: string) {
     setActiveConversationId(id);
     setPendingContextRefs([]);
@@ -925,6 +1033,7 @@ export function useConversation() {
     setIsStreaming(true);
     setStreamingContent("");
     setStreamPhase("thinking");
+    suppressStreamUntilStatus = false;
     clearStreamWatchdog();
     streamWatchdog = setTimeout(() => {
       if (!isStreaming()) return;
@@ -944,16 +1053,36 @@ export function useConversation() {
   }
 
   function appendStreamChunk(chunk: string) {
-    setStreamingContent((prev) => prev + chunk);
+    if (suppressStreamUntilStatus) return;
+    const next = streamingContent() + chunk;
+    if (containsToolLeakage(chunk) || containsToolLeakage(next)) {
+      suppressStreamUntilStatus = true;
+      setStreamingContent("");
+      setStreamPhase("thinking");
+      return;
+    }
+    setStreamingContent(next);
   }
 
   async function finishStreaming(messageId: string) {
     if (!isStreaming()) return;
     clearStreamWatchdog();
     const content = streamingContent();
-    const isDocDraft = activeDraftResponse();
-    const isEvidence = activeEvidenceResponse();
     const workflow = completeWorkflowSnapshot(messageId);
+    // Defensive: trace events normally set the per-turn flags, but on the
+    // very first send the listener may register after classify_result was
+    // emitted and the flag never lands. Fall back to workspaceMode (set
+    // optimistically by dispatchTurn) and the workflow mode so a draft/
+    // evidence turn is still routed correctly.
+    const workflowMode = workflow?.mode;
+    const isDocDraft =
+      activeDraftResponse() ||
+      workspaceMode() === "draft" ||
+      (isAgentModeValue(workflowMode) && workflowMode === "draft");
+    const isEvidence =
+      activeEvidenceResponse() ||
+      workspaceMode() === "evidence" ||
+      (isAgentModeValue(workflowMode) && workflowMode === "evidence");
     const pendingClarification = workflowHasPendingClarification(workflow);
 
     if (pendingClarification) {
@@ -983,6 +1112,8 @@ export function useConversation() {
             docMeta().title || "法律文书",
           );
           contentHidden = true;
+          setCommittedMode("draft");
+          setCommittedLabel(workspaceModeLabel() || docMeta().title || "文书起草");
         } else {
           // Keep any previously rendered document — the failed turn produced nothing usable.
           setDraftWorkflowActive(false);
@@ -1002,15 +1133,25 @@ export function useConversation() {
           applyMarkdownReport(stripReportPreamble(cleaned));
           displayContent = evidenceCompletionSummary(workspaceModeLabel() || "案卷分析报告");
           contentHidden = true;
+          setCommittedMode("evidence");
+          setCommittedLabel(workspaceModeLabel() || "案情分析");
         }
       } else {
-        const envelope = extractDraftOutputEnvelope(content);
-        const parsed = await tryApplyDocumentFromContent(content);
-        if (parsed) {
-          displayContent = envelope.assistantMarkdown
-            ? draftDisplayContent(envelope.assistantMarkdown, docMeta().title || "法律文书")
-            : draftCompletionSummary(docMeta().title || "法律文书");
-          contentHidden = true;
+        // Q&A (法律问答) turn — render the answer as a plain chat message; never
+        // parse it into a document. Strip any tool-call residue first.
+        const cleaned = sanitizeLlmDocumentContent(content);
+        if (!cleaned || containsToolLeakage(cleaned)) {
+          displayContent =
+            "**回答未完成：** 模型返回了工具调用残留，未能生成可读回答。请重试，或检查模型是否支持标准工具调用。";
+          shouldSuggest = false;
+        } else {
+          displayContent = cleaned;
+          contentHidden = false;
+          // A Q&A turn while a producing task still owns the preview is an
+          // "aside": answer inline and reassure the user the draft is intact.
+          if (committedMode()) {
+            displayContent = `${cleaned}\n\n> 已按问答回复，右侧「${committedLabel() || "当前任务"}」内容已保留。`;
+          }
         }
       }
 
@@ -1045,12 +1186,14 @@ export function useConversation() {
     setIsStreaming(false);
     setStreamingContent("");
     setStreamPhase(null);
+    suppressStreamUntilStatus = false;
     if (legalDocument() !== null) {
       setDraftWorkflowActive(false);
     }
   }
 
   function setStreamStatus(status: string | null) {
+    if (status) suppressStreamUntilStatus = false;
     if (status === "tool" || status === "thinking" || status === "clarifying") {
       setStreamingContent("");
     }
@@ -1192,20 +1335,13 @@ export function useConversation() {
     return sendChatMessage(answerTextFromClarification(answers), { uiHidden: true });
   }
 
-  async function resolveAgentMode(content: string, refs: ContextRefPayload[]) {
-    const result = await classifyAgentMode({
-      content,
-      context_refs: refs.length > 0 ? refs : undefined,
-    });
-    setWorkspaceMode(result.mode);
-    setWorkspaceModeLabel(result.label);
-    return result;
-  }
-
   async function initWorkspace(prompt: string, conversationId: string) {
     setWorkspacePrompt(prompt);
     setWorkspaceMode("idle");
     setWorkspaceModeLabel("");
+    setCommittedMode(null);
+    setCommittedLabel("");
+    setPendingModeSwitch(null);
     setDocMode("preview");
     setJustAddedId(null);
     setCiteState({ open: false, tab: "law", key: null });
@@ -1217,29 +1353,71 @@ export function useConversation() {
     clearDocumentState();
     await loadMessages(conversationId);
     await restoreDocumentFromMessages();
-    const trimmed = prompt.trim();
-    const refs = mergeDirectoryRefs(trimmed, pendingContextRefs());
-    if (trimmed || refs.length > 0) {
-      try {
-        await resolveAgentMode(trimmed || "分析附加的本地资料", refs);
-      } catch (e) {
-        console.warn("意图分类失败:", e);
-      }
-    }
   }
 
-  function sendChatMessage(
+  // Actually fire the turn. The caller has already shown the user bubble and
+  // bound any workspaces; forced_mode tells the backend the resolved mode so it
+  // does not re-classify.
+  function dispatchTurn(
+    convId: string,
+    trimmed: string,
+    refs: ContextRefPayload[],
+    opts: { uiHidden?: boolean; forcedMode?: AgentMode; forcedLabel?: string } = {},
+  ): Promise<void> {
+    // The right-side preview must light up before the backend's
+    // `classify_result` trace event arrives — for the very first auto-send on
+    // a new conversation the listener may register a tick after the round
+    // starts, so the trace never reaches ingestAgentTrace. Mirror the
+    // committed/forged mode into the layout signals synchronously.
+    applyOptimisticMode(opts.forcedMode, opts.forcedLabel);
+    startStreaming();
+
+    return sendMessage({
+      conversation_id: convId,
+      content: trimmed,
+      context_refs: refs.length > 0 ? refs : undefined,
+      ui_hidden: opts.uiHidden || undefined,
+      forced_mode: opts.forcedMode,
+      forced_label: opts.forcedLabel,
+      current_mode: committedMode() ?? undefined,
+      current_task_label: committedLabel() || undefined,
+      has_active_document: committedMode() != null,
+    })
+      .then((messageId) => {
+        void loadConversations();
+        setTimeout(() => {
+          if (isStreaming()) {
+            void finishStreaming(messageId);
+          }
+        }, 250);
+      })
+      .catch((e) => {
+        console.error("发送消息失败:", e);
+        clearStreamWatchdog();
+        setIsStreaming(false);
+        setStreamingContent("");
+        setStreamPhase(null);
+        suppressStreamUntilStatus = false;
+        setActiveDraftResponse(false);
+        setActiveEvidenceResponse(false);
+        setDraftWorkflowActive(false);
+        throw e;
+      });
+  }
+
+  async function sendChatMessage(
     text: string,
     options: { uiHidden?: boolean } = {},
   ): Promise<void> {
     const convId = activeConversationId();
     const trimmed = text.trim();
     const allRefs = mergeDirectoryRefs(trimmed, pendingContextRefs());
-    // Resolve inline @ mentions: if user used @refs in text, use only those; otherwise use all attachments
-    const inlineRefs = resolveInlineMentions(trimmed, allRefs, inlineMentionPaths());
-    const refs = inlineRefs.length > 0 ? inlineRefs : allRefs;
-    if (!convId || isStreaming()) return Promise.resolve();
-    if (!trimmed && refs.length === 0) return Promise.resolve();
+    // Resolve inline @ mentions: if user used @refs in text, use only those; otherwise use all attachments.
+    const refs = selectContextRefsForSend(trimmed, allRefs, inlineMentionPaths());
+    if (!convId || isStreaming() || preflightInFlight) return;
+    if (!trimmed && refs.length === 0) return;
+    // A fresh user send supersedes any unanswered switch prompt.
+    if (!options.uiHidden) setPendingModeSwitch(null);
     clearContextRefs();
     clearInlineMentions();
 
@@ -1256,41 +1434,82 @@ export function useConversation() {
         id: `pending-user-${Date.now()}`,
         conversation_id: convId,
         role: "user",
-        content: trimmed || (refs.length > 0 ? `[已附加 ${refs.length} 项本地资料]` : ""),
+        content: formatUserMessageContentForStorage(trimmed, refs),
         created_at: new Date().toISOString(),
       });
     }
 
-    setActiveDraftResponse(false);
-    setActiveEvidenceResponse(false);
-    setDraftWorkflowActive(false);
-    startStreaming();
-
-    return sendMessage({
-      conversation_id: convId,
-      content: trimmed,
-      context_refs: refs.length > 0 ? refs : undefined,
-      ui_hidden: options.uiHidden || undefined,
-    })
-      .then((messageId) => {
-        void loadConversations();
-        setTimeout(() => {
-          if (isStreaming()) {
-            void finishStreaming(messageId);
-          }
-        }, 250);
-      })
-      .catch((e) => {
-        console.error("发送消息失败:", e);
-        clearStreamWatchdog();
-        setIsStreaming(false);
-        setStreamingContent("");
-        setStreamPhase(null);
-        setActiveDraftResponse(false);
-        setActiveEvidenceResponse(false);
-        setDraftWorkflowActive(false);
-        throw e;
+    // System follow-ups (clarification answers) continue the committed task
+    // deterministically — never re-classify or interrupt them.
+    if (options.uiHidden) {
+      return dispatchTurn(convId, trimmed, refs, {
+        forcedMode: committedMode() ?? undefined,
+        forcedLabel: committedLabel() || undefined,
       });
+    }
+
+    // Per-turn intent pre-flight (context-aware). On failure, fall back to
+    // continuing the committed task (or letting the backend classify).
+    let result: ClassifyAgentModeResult | null = null;
+    preflightInFlight = true;
+    try {
+      result = await classifyAgentMode({
+        content: trimmed || "分析附加的本地资料",
+        context_refs: refs.length > 0 ? refs : undefined,
+        current_mode: committedMode() ?? undefined,
+        current_task_label: committedLabel() || undefined,
+        has_active_document: committedMode() != null,
+      });
+    } catch (e) {
+      console.warn("意图分类失败:", e);
+    } finally {
+      preflightInFlight = false;
+    }
+
+    const resolved = result?.source === "fallback" ? null : result;
+
+    // Only a genuine switch away from an existing artifact interrupts the user.
+    const committed = committedMode();
+    if (resolved && resolved.action === "switch" && committed) {
+      setPendingModeSwitch({
+        newMode: resolved.mode,
+        newLabel: resolved.label || agentModeLabel(resolved.mode),
+        curLabel: committedLabel() || agentModeLabel(committed),
+        text: trimmed,
+        refs,
+      });
+      return;
+    }
+
+    return dispatchTurn(convId, trimmed, refs, {
+      forcedMode: resolved?.mode ?? committed ?? undefined,
+      forcedLabel: resolved?.label ?? (committed ? committedLabel() : undefined),
+    });
+  }
+
+  /** Resolve a pending switch prompt: ① start the new task, or ② keep refining
+   *  the current one. ③ (custom) is handled in the UI via cancelModeSwitch. */
+  function confirmModeSwitch(choice: "switch" | "continue") {
+    const pending = pendingModeSwitch();
+    const convId = activeConversationId();
+    if (!pending || !convId) return;
+    setPendingModeSwitch(null);
+    const opts =
+      choice === "switch"
+        ? { forcedMode: pending.newMode, forcedLabel: pending.newLabel }
+        : {
+            forcedMode: committedMode() ?? undefined,
+            forcedLabel: committedLabel() || undefined,
+          };
+    void dispatchTurn(convId, pending.text, pending.refs, opts).catch(() => {
+      // dispatchTurn already reset the stream state; restore the card so the
+      // user can retry their choice instead of the prompt vanishing silently.
+      setPendingModeSwitch(pending);
+    });
+  }
+
+  function cancelModeSwitch() {
+    setPendingModeSwitch(null);
   }
 
   function flashArticle(id: string) {
@@ -1312,6 +1531,11 @@ export function useConversation() {
     workspacePrompt,
     workspaceMode,
     workspaceModeLabel,
+    committedMode,
+    committedLabel,
+    pendingModeSwitch,
+    confirmModeSwitch,
+    cancelModeSwitch,
     legalDocument,
     documentMarkdown,
     documentId,
@@ -1326,6 +1550,7 @@ export function useConversation() {
     inlineMentionPaths,
     workspaceIndexByPath,
     messageDisplayContent,
+    messageDisplayParts,
     messageWorkflow,
     activeWorkflow,
     ingestAgentTrace,
@@ -1342,6 +1567,7 @@ export function useConversation() {
     loadConversations,
     loadMessages,
     removeConversation,
+    renameConversation,
     switchConversation,
     selectConversation,
     setActiveConversationId,

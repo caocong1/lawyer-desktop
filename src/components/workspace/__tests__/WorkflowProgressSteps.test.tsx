@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { describe, expect, it, vi } from "vitest";
 import {
   ClarificationCard,
+  ModeSwitchCard,
   WorkflowNotice,
 } from "../WorkflowProgressSteps";
 import type { WorkflowState } from "../../../types/workflow";
@@ -32,6 +33,43 @@ describe("WorkflowNotice", () => {
 
     fireEvent.click(screen.getByText("详情"));
     expect(await screen.findByText("判断事项类型")).toBeTruthy();
+  });
+});
+
+describe("WorkflowNotice title", () => {
+  it("labels a chat workflow as 法律问答 when no mode_label is set", () => {
+    render(() => (
+      <WorkflowNotice
+        workflow={() => workflow({ mode: "chat", mode_label: undefined, status: "running" })}
+      />
+    ));
+    expect(screen.getByText("法律问答")).toBeTruthy();
+  });
+});
+
+describe("ModeSwitchCard", () => {
+  it("offers switch / continue / custom and routes each action", () => {
+    const onSwitch = vi.fn();
+    const onContinue = vi.fn();
+    const onCustom = vi.fn();
+    render(() => (
+      <ModeSwitchCard
+        curLabel="股权转让协议起草"
+        newLabel="房屋租赁合同起草"
+        onSwitch={onSwitch}
+        onContinue={onContinue}
+        onCustom={onCustom}
+      />
+    ));
+
+    fireEvent.click(screen.getByText("切换到「房屋租赁合同起草」"));
+    expect(onSwitch).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByText("继续完善「股权转让协议起草」"));
+    expect(onContinue).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByText("都不是，我再说明…"));
+    expect(onCustom).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -76,6 +114,49 @@ describe("ClarificationCard", () => {
     ]);
   });
 
+  it("allows multiple selections when allow_multiple is true", () => {
+    const onSubmit = vi.fn();
+    render(() => (
+      <ClarificationCard
+        workflow={() =>
+          workflow({
+            status: "waiting",
+            clarification: {
+              id: "clarify",
+              status: "pending",
+              questions: [
+                {
+                  id: "types",
+                  question: "涉及哪类业务？",
+                  allow_multiple: true,
+                  options: [
+                    { id: "lease", label: "租赁", value: "lease" },
+                    { id: "sale", label: "买卖", value: "sale" },
+                  ],
+                },
+              ],
+            },
+          })
+        }
+        onClarificationSubmit={onSubmit}
+      />
+    ));
+
+    expect(screen.getByText("（可多选）")).toBeTruthy();
+    fireEvent.click(screen.getByText("租赁"));
+    fireEvent.click(screen.getByText("买卖"));
+    fireEvent.click(screen.getByText("提交补充信息"));
+
+    expect(onSubmit).toHaveBeenCalledWith("m1", [
+      {
+        question_id: "types",
+        question: "涉及哪类业务？",
+        answer: "lease|sale",
+        display_answer: "租赁、买卖",
+      },
+    ]);
+  });
+
   it("maps old stored internal values back to Chinese labels", () => {
     render(() => (
       <ClarificationCard
@@ -107,5 +188,40 @@ describe("ClarificationCard", () => {
     ));
 
     expect(screen.getByText("已选：5000 万元以上")).toBeTruthy();
+  });
+
+  it("maps pipe-separated multi-select answers back to Chinese labels", () => {
+    render(() => (
+      <ClarificationCard
+        workflow={() =>
+          workflow({
+            clarification: {
+              id: "clarify",
+              status: "answered",
+              answers: [
+                {
+                  question_id: "types",
+                  question: "涉及哪类业务？",
+                  answer: "lease|sale",
+                },
+              ],
+              questions: [
+                {
+                  id: "types",
+                  question: "涉及哪类业务？",
+                  allow_multiple: true,
+                  options: [
+                    { id: "lease", label: "租赁", value: "lease" },
+                    { id: "sale", label: "买卖", value: "sale" },
+                  ],
+                },
+              ],
+            },
+          })
+        }
+      />
+    ));
+
+    expect(screen.getByText("已选：租赁、买卖")).toBeTruthy();
   });
 });
